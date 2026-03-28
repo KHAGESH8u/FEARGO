@@ -4,28 +4,50 @@ import {
   ScrollView, Dimensions, Platform, StatusBar, Image, ActivityIndicator
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import Svg, { Circle } from 'react-native-svg';
 import NeumorphicView from '../components/NeumorphicView';
 import { supabase } from '../utils/supabase';
 
 const { width } = Dimensions.get('window');
 const isLargeScreen = width > 768;
 
+// --- DYNAMIC PASS/FAIL DONUT CHART ---
+const DynamicDonut = ({ passed, failed, total }) => {
+  const size = 160;
+  const strokeWidth = 24;
+  const center = size / 2;
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+
+  if (total === 0) {
+    return <Circle cx={center} cy={center} r={radius} stroke="#d1d9e6" strokeWidth={strokeWidth} fill="none" />;
+  }
+
+  const passShare = (passed / total) * circumference;
+  const failShare = (failed / total) * circumference;
+
+  return (
+    <Svg width={size} height={size} style={{ transform: [{ rotate: '-90deg' }], position: 'absolute' }}>
+      <Circle cx={center} cy={center} r={radius} fill="none" stroke="#4CAF50" strokeWidth={strokeWidth} strokeDasharray={`${passShare} ${circumference}`} />
+      <Circle cx={center} cy={center} r={radius} fill="none" stroke="#FF5C5C" strokeWidth={strokeWidth} strokeDasharray={`${failShare} ${circumference}`} strokeDashoffset={-passShare} />
+    </Svg>
+  );
+};
+
 export default function TeacherQuizResults({ session, onBack }) {
   const [results, setResults] = useState([]);
   const [totalStudentsAttempted, setTotalStudentsAttempted] = useState(0);
+  const [passCount, setPassCount] = useState(0);
+  const [failCount, setFailCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     if (!session?.id) return;
     fetchResults();
 
-    // REAL-TIME: Listen for new student submissions
     const responseSub = supabase.channel('public:quiz_responses')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'quiz_responses' }, 
-        () => {
-          // Re-fetch to recalculate the charts when a new answer drops
-          fetchResults();
-        }
+        () => fetchResults() // Refresh graph when new answers drop
       )
       .subscribe();
 
@@ -35,7 +57,6 @@ export default function TeacherQuizResults({ session, onBack }) {
   }, [session]);
 
   const fetchResults = async () => {
-    // 1. Fetch the active quizzes for this session
     const { data: quizzes } = await supabase
       .from('quizzes')
       .select('*')
@@ -49,18 +70,39 @@ export default function TeacherQuizResults({ session, onBack }) {
       return;
     }
 
-    // 2. Fetch all responses for these quizzes
     const quizIds = quizzes.map(q => q.id);
     const { data: responses } = await supabase
       .from('quiz_responses')
       .select('*')
       .in('quiz_id', quizIds);
 
-    // Calculate unique students who attempted
-    const uniqueStudents = new Set(responses?.map(r => r.student_id) || []).size;
+    // --- 1. CALCULATE PASS / FAIL RATIO ---
+    const studentScores = {};
+    responses?.forEach(r => {
+      if (!studentScores[r.student_id]) studentScores[r.student_id] = 0;
+      
+      const question = quizzes.find(q => q.id === r.quiz_id);
+      if (question && question.correct_option === r.selected_option) {
+        studentScores[r.student_id] += 1;
+      }
+    });
+
+    const uniqueStudents = Object.keys(studentScores).length;
     setTotalStudentsAttempted(uniqueStudents);
 
-    // 3. Map the data to match your friend's UI structure
+    let passed = 0;
+    let failed = 0;
+    const passingThreshold = quizzes.length / 2; // 50% to pass
+
+    Object.values(studentScores).forEach(score => {
+      if (score >= passingThreshold) passed++;
+      else failed++;
+    });
+
+    setPassCount(passed);
+    setFailCount(failed);
+
+    // --- 2. MAP DETAILED QUESTION DATA ---
     const mappedResults = quizzes.map((q) => {
       const qResponses = responses?.filter(r => r.quiz_id === q.id) || [];
       const totalAnswers = qResponses.length;
@@ -74,12 +116,7 @@ export default function TeacherQuizResults({ session, onBack }) {
         };
       });
 
-      return {
-        id: q.id,
-        text: q.text,
-        totalAnswers: totalAnswers,
-        options: optionsData
-      };
+      return { id: q.id, text: q.text, totalAnswers, options: optionsData };
     });
 
     setResults(mappedResults);
@@ -95,20 +132,19 @@ export default function TeacherQuizResults({ session, onBack }) {
     return (
       <SafeAreaView style={[styles.safeArea, { justifyContent: 'center', alignItems: 'center' }]}>
         <ActivityIndicator size="large" color="#4f8cff" />
-        <Text style={{ marginTop: 20 }}>Loading Live Results...</Text>
+        <Text style={{ marginTop: 20, fontWeight: 'bold', color: '#6b7280' }}>Crunching Live Results...</Text>
       </SafeAreaView>
     );
   }
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      {/* ── HEADER ── */}
       <View style={styles.headerBar}>
         <View style={styles.headerLeft}>
           <Image source={require('../assets/logo.png')} style={{ width: 36, height: 36 }} resizeMode="contain" />
           <View style={{ marginLeft: 6 }}>
             <Text style={[styles.headerAppName, { marginLeft: 0 }]}>FearGo</Text>
-            <Text style={{ fontSize: 10, color: 'rgba(255,255,255,0.8)', marginTop: 2 }}>Ask Without Fear.Learn Without Doubt</Text>
+            <Text style={{ fontSize: 10, color: 'rgba(255,255,255,0.8)', marginTop: 2 }}>For Educators</Text>
           </View>
         </View>
 
@@ -122,21 +158,49 @@ export default function TeacherQuizResults({ session, onBack }) {
 
       <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
         
-        {/* ── PAGE TITLE ── */}
         <View style={styles.pageTitleSection}>
           <Text style={styles.pageTitle}>Live Quiz Results</Text>
           <Text style={styles.pageSubtitle}>Monitor student responses in real time</Text>
         </View>
 
-        {/* ── STATS CARD ── */}
-        <NeumorphicView style={styles.statsCard}>
-          <Ionicons name="people" size={32} color="#4f8cff" />
-          <Text style={styles.statsTitle}>Students Participated</Text>
-          <Text style={styles.statsNumber}>{totalStudentsAttempted}</Text>
-          <Text style={styles.statsSubtitle}>Responses logged</Text>
+        {/* ── NEW: CLASS PERFORMANCE SUMMARY CHART ── */}
+        <NeumorphicView style={[styles.card, { padding: 24, marginBottom: 24, alignItems: 'center' }]}>
+          <Text style={styles.cardTitle}>Class Performance</Text>
+          
+          <View style={styles.chartRow}>
+            <View style={styles.chartContainer}>
+              <NeumorphicView style={styles.donutOuter}>
+                <DynamicDonut passed={passCount} failed={failCount} total={totalStudentsAttempted} />
+                <NeumorphicView style={styles.donutInner}>
+                  <Text style={styles.donutCenterMetric}>{totalStudentsAttempted}</Text>
+                  <Text style={styles.donutCenterLabel}>Total</Text>
+                </NeumorphicView>
+              </NeumorphicView>
+            </View>
+
+            <View style={styles.statsColumn}>
+              <View style={styles.statBox}>
+                <View style={[styles.legendDot, { backgroundColor: '#4CAF50' }]} />
+                <View>
+                  <Text style={styles.statNumber}>{passCount}</Text>
+                  <Text style={styles.statLabel}>Passed (≥50%)</Text>
+                </View>
+              </View>
+              <View style={[styles.statBox, { marginTop: 16 }]}>
+                <View style={[styles.legendDot, { backgroundColor: '#FF5C5C' }]} />
+                <View>
+                  <Text style={styles.statNumber}>{failCount}</Text>
+                  <Text style={styles.statLabel}>Failed {"(<50%)"}</Text>
+                </View>
+              </View>
+            </View>
+          </View>
         </NeumorphicView>
 
-        {/* ── RESULTS LIST ── */}
+        <View style={styles.divider} />
+        <Text style={[styles.cardTitle, { marginBottom: 16, marginLeft: 4 }]}>Question Breakdown</Text>
+
+        {/* ── DETAILED RESULTS LIST ── */}
         {results.length === 0 ? (
           <Text style={{ textAlign: 'center', color: '#6b7280', marginTop: 20 }}>No active quiz data to display.</Text>
         ) : (
@@ -188,10 +252,24 @@ const styles = StyleSheet.create({
   pageTitleSection: { alignItems: 'center', marginBottom: 24 },
   pageTitle: { fontSize: 24, fontWeight: 'bold', color: '#2f3542', marginBottom: 4 },
   pageSubtitle: { fontSize: 13, color: '#6b7280', textAlign: 'center' },
-  statsCard: { borderRadius: 20, padding: 20, alignItems: 'center', marginBottom: 24 },
-  statsTitle: { fontSize: 14, fontWeight: '600', color: '#6b7280', marginTop: 12, marginBottom: 4 },
-  statsNumber: { fontSize: 28, fontWeight: 'bold', color: '#4f8cff' },
-  statsSubtitle: { fontSize: 12, color: '#2f3542', marginTop: 4 },
+  
+  // NEW SUMMARY CHART STYLES
+  card: { borderRadius: 20, backgroundColor: '#e0e5ec' },
+  cardTitle: { fontSize: 18, fontWeight: 'bold', color: '#2f3542', alignSelf: 'flex-start', width: '100%', marginBottom: 20 },
+  chartRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', width: '100%', flexWrap: 'wrap' },
+  chartContainer: { alignItems: 'center', marginVertical: 8, marginRight: 20 },
+  donutOuter: { width: 160, height: 160, borderRadius: 80, alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  donutInner: { width: 100, height: 100, borderRadius: 50, backgroundColor: '#e0e5ec', zIndex: 10, alignItems: 'center', justifyContent: 'center' },
+  donutCenterMetric: { fontSize: 28, fontWeight: 'bold', color: '#2f3542' },
+  donutCenterLabel: { fontSize: 12, color: '#6b7280', fontWeight: 'bold', textTransform: 'uppercase' },
+  statsColumn: { justifyContent: 'center' },
+  statBox: { flexDirection: 'row', alignItems: 'flex-start' },
+  legendDot: { width: 12, height: 12, borderRadius: 6, marginRight: 12, marginTop: 4 },
+  statNumber: { fontSize: 20, fontWeight: 'bold', color: '#2f3542', lineHeight: 22 },
+  statLabel: { fontSize: 12, color: '#6b7280', fontWeight: '600' },
+  divider: { height: 1, backgroundColor: '#d1dce8', width: '100%', marginVertical: 8 },
+
+  // BREAKDOWN STYLES
   resultCard: { borderRadius: 20, padding: 20, marginBottom: 20 },
   questionIndex: { fontSize: 12, fontWeight: 'bold', color: '#4f8cff', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 },
   questionText: { fontSize: 16, fontWeight: '600', color: '#2f3542', marginBottom: 20, lineHeight: 22 },

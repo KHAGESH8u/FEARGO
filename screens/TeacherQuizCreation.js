@@ -42,18 +42,26 @@ export default function TeacherQuizCreation({ session, onBack, onPublish }) {
       Alert.alert("Empty Quiz", "Please add at least one question before publishing.");
       return;
     }
-    
+
     setIsPublishing(true);
 
-    // Format questions for Supabase
+    // --- NEW FIX: DEACTIVATE OLD QUIZZES FIRST ---
+    // This tells the database: "Turn off any currently active questions for this session"
+    await supabase
+      .from('quizzes')
+      .update({ is_active: false })
+      .eq('session_id', session.id);
+
+    // Now, format the NEW questions
     const dbQuestions = questions.map(q => ({
       session_id: session.id,
       text: q.text,
       options: q.options,
       correct_option: q.correctOption,
-      is_active: true // This triggers the student's banner!
+      is_active: true // Only these new ones will be active!
     }));
 
+    // Insert the new questions
     const { error } = await supabase.from('quizzes').insert(dbQuestions);
 
     setIsPublishing(false);
@@ -87,14 +95,14 @@ export default function TeacherQuizCreation({ session, onBack, onPublish }) {
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
-          
+
           {isPublished ? (
             <NeumorphicView style={styles.successCard}>
               <Ionicons name="checkmark-circle" size={80} color="#4CAF50" style={{ marginBottom: 20 }} />
               <Text style={styles.successTitle}>Quiz Published Successfully</Text>
               <Text style={styles.successSubtitle}>Students can now attempt the quiz from their dashboard.</Text>
               <Text style={styles.successHelperText}>
-                Students will see the quiz in the <Text style={{fontWeight: 'bold'}}>View Quiz</Text> banner on their interface.
+                Students will see the quiz in the <Text style={{ fontWeight: 'bold' }}>View Quiz</Text> banner on their interface.
               </Text>
               <TouchableOpacity onPress={() => onPublish && onPublish(questions)} activeOpacity={0.8} style={{ marginTop: 40, width: '100%' }}>
                 <NeumorphicView style={styles.backDashboardButton}>
@@ -109,91 +117,91 @@ export default function TeacherQuizCreation({ session, onBack, onPublish }) {
                 <Text style={styles.pageSubtitle}>Add questions to build your assessment</Text>
               </View>
 
-          <NeumorphicView style={styles.card}>
-            <Text style={styles.inputLabel}>Question Text</Text>
-            <NeumorphicView inset style={styles.inputContainerArea}>
-              <TextInput style={[styles.textInputArea, { minHeight: 30 }]} placeholder="Enter the question here..." placeholderTextColor="#94a3b8" value={draft.text} onChangeText={(text) => setDraft({ ...draft, text })} multiline />
-            </NeumorphicView>
+              <NeumorphicView style={styles.card}>
+                <Text style={styles.inputLabel}>Question Text</Text>
+                <NeumorphicView inset style={styles.inputContainerArea}>
+                  <TextInput style={[styles.textInputArea, { minHeight: 30 }]} placeholder="Enter the question here..." placeholderTextColor="#94a3b8" value={draft.text} onChangeText={(text) => setDraft({ ...draft, text })} multiline />
+                </NeumorphicView>
 
-            <Text style={[styles.inputLabel, { marginTop: 16, marginBottom: 8 }]}>Options</Text>
-            <View style={styles.optionsWrap}>
-              {draft.options.map((opt, oIndex) => (
-                <View key={oIndex} style={styles.optionInputRow}>
-                  <Text style={styles.optionLetterText}>{String.fromCharCode(65 + oIndex)}.</Text>
-                  <NeumorphicView inset style={styles.inputContainerAreaRow}>
-                    <TextInput style={styles.textInputOption} placeholder={`Option ${String.fromCharCode(65 + oIndex)}`} placeholderTextColor="#94a3b8" value={opt} onChangeText={(text) => updateDraftOption(oIndex, text)} />
-                  </NeumorphicView>
+                <Text style={[styles.inputLabel, { marginTop: 16, marginBottom: 8 }]}>Options</Text>
+                <View style={styles.optionsWrap}>
+                  {draft.options.map((opt, oIndex) => (
+                    <View key={oIndex} style={styles.optionInputRow}>
+                      <Text style={styles.optionLetterText}>{String.fromCharCode(65 + oIndex)}.</Text>
+                      <NeumorphicView inset style={styles.inputContainerAreaRow}>
+                        <TextInput style={styles.textInputOption} placeholder={`Option ${String.fromCharCode(65 + oIndex)}`} placeholderTextColor="#94a3b8" value={opt} onChangeText={(text) => updateDraftOption(oIndex, text)} />
+                      </NeumorphicView>
+                    </View>
+                  ))}
                 </View>
-              ))}
-            </View>
 
-            <Text style={[styles.inputLabel, { marginTop: 20, marginBottom: 12 }]}>Correct Answer</Text>
-            <View style={{ zIndex: 100 }}>
-              <TouchableOpacity onPress={() => setDropdownOpen(!dropdownOpen)} activeOpacity={0.8}>
-                <NeumorphicView inset={false} style={styles.dropdownHeader}>
-                  <Text style={styles.dropdownHeaderText}>Option {String.fromCharCode(65 + draft.correctOption)}</Text>
-                  <Ionicons name={dropdownOpen ? "chevron-up" : "chevron-down"} size={20} color="#2f3542" />
+                <Text style={[styles.inputLabel, { marginTop: 20, marginBottom: 12 }]}>Correct Answer</Text>
+                <View style={{ zIndex: 100 }}>
+                  <TouchableOpacity onPress={() => setDropdownOpen(!dropdownOpen)} activeOpacity={0.8}>
+                    <NeumorphicView inset={false} style={styles.dropdownHeader}>
+                      <Text style={styles.dropdownHeaderText}>Option {String.fromCharCode(65 + draft.correctOption)}</Text>
+                      <Ionicons name={dropdownOpen ? "chevron-up" : "chevron-down"} size={20} color="#2f3542" />
+                    </NeumorphicView>
+                  </TouchableOpacity>
+
+                  {dropdownOpen && (
+                    <View style={styles.dropdownListWrapper}>
+                      <NeumorphicView style={styles.dropdownListContainer}>
+                        {[0, 1, 2, 3].map((oIndex) => {
+                          const isSelected = draft.correctOption === oIndex;
+                          return (
+                            <TouchableOpacity key={oIndex} style={[styles.dropdownItem, isSelected && styles.dropdownItemSelected]} onPress={() => { setDraft({ ...draft, correctOption: oIndex }); setDropdownOpen(false); }}>
+                              <Text style={[styles.dropdownItemText, isSelected && styles.dropdownItemTextSelected]}>Option {String.fromCharCode(65 + oIndex)}</Text>
+                              {isSelected && <Ionicons name="checkmark" size={18} color="#4f8cff" />}
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </NeumorphicView>
+                    </View>
+                  )}
+                </View>
+              </NeumorphicView>
+
+              <TouchableOpacity onPress={handleAddQuestion} activeOpacity={0.8} style={{ alignSelf: 'center', marginBottom: 40 }}>
+                <NeumorphicView style={styles.addButton}>
+                  <Ionicons name="add" size={20} color="#2f3542" style={{ marginRight: 8 }} />
+                  <Text style={styles.addButtonText}>Add Question</Text>
                 </NeumorphicView>
               </TouchableOpacity>
 
-              {dropdownOpen && (
-                <View style={styles.dropdownListWrapper}>
-                  <NeumorphicView style={styles.dropdownListContainer}>
-                    {[0, 1, 2, 3].map((oIndex) => {
-                      const isSelected = draft.correctOption === oIndex;
-                      return (
-                        <TouchableOpacity key={oIndex} style={[styles.dropdownItem, isSelected && styles.dropdownItemSelected]} onPress={() => { setDraft({ ...draft, correctOption: oIndex }); setDropdownOpen(false); }}>
-                          <Text style={[styles.dropdownItemText, isSelected && styles.dropdownItemTextSelected]}>Option {String.fromCharCode(65 + oIndex)}</Text>
-                          {isSelected && <Ionicons name="checkmark" size={18} color="#4f8cff" />}
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </NeumorphicView>
+              {questions.length > 0 && (
+                <View style={styles.previewSection}>
+                  <Text style={styles.previewSectionTitle}>Quiz Preview</Text>
+                  {questions.map((q, qIndex) => (
+                    <NeumorphicView key={q.id} style={styles.previewCard}>
+                      <View style={styles.previewHeader}>
+                        <Text style={styles.previewQuestionIndex}>Question {qIndex + 1}</Text>
+                        <TouchableOpacity onPress={() => handleDelete(q.id)}><Ionicons name="trash-outline" size={20} color="#FF5C5C" /></TouchableOpacity>
+                      </View>
+                      <Text style={styles.previewQuestionText}>{q.text}</Text>
+                      <View style={styles.previewOptionsList}>
+                        {q.options.map((opt, oIndex) => {
+                          const isCorrect = q.correctOption === oIndex;
+                          return (
+                            <View key={oIndex} style={styles.previewOptionRow}>
+                              <Text style={[styles.previewOptionText, isCorrect && styles.previewOptionTextCorrect]}>{String.fromCharCode(65 + oIndex)}. {opt || `(Empty Option)`}</Text>
+                              {isCorrect && (<View style={styles.correctBadge}><Ionicons name="checkmark-circle" size={14} color="#4CAF50" style={{ marginRight: 4 }} /><Text style={styles.correctBadgeText}>Correct</Text></View>)}
+                            </View>
+                          )
+                        })}
+                      </View>
+                    </NeumorphicView>
+                  ))}
                 </View>
               )}
-            </View>
-          </NeumorphicView>
 
-          <TouchableOpacity onPress={handleAddQuestion} activeOpacity={0.8} style={{ alignSelf: 'center', marginBottom: 40 }}>
-            <NeumorphicView style={styles.addButton}>
-              <Ionicons name="add" size={20} color="#2f3542" style={{ marginRight: 8 }} />
-              <Text style={styles.addButtonText}>Add Question</Text>
-            </NeumorphicView>
-          </TouchableOpacity>
-
-          {questions.length > 0 && (
-            <View style={styles.previewSection}>
-              <Text style={styles.previewSectionTitle}>Quiz Preview</Text>
-              {questions.map((q, qIndex) => (
-                <NeumorphicView key={q.id} style={styles.previewCard}>
-                  <View style={styles.previewHeader}>
-                    <Text style={styles.previewQuestionIndex}>Question {qIndex + 1}</Text>
-                    <TouchableOpacity onPress={() => handleDelete(q.id)}><Ionicons name="trash-outline" size={20} color="#FF5C5C" /></TouchableOpacity>
-                  </View>
-                  <Text style={styles.previewQuestionText}>{q.text}</Text>
-                  <View style={styles.previewOptionsList}>
-                    {q.options.map((opt, oIndex) => {
-                      const isCorrect = q.correctOption === oIndex;
-                      return (
-                        <View key={oIndex} style={styles.previewOptionRow}>
-                          <Text style={[styles.previewOptionText, isCorrect && styles.previewOptionTextCorrect]}>{String.fromCharCode(65 + oIndex)}. {opt || `(Empty Option)`}</Text>
-                          {isCorrect && (<View style={styles.correctBadge}><Ionicons name="checkmark-circle" size={14} color="#4CAF50" style={{ marginRight: 4 }} /><Text style={styles.correctBadgeText}>Correct</Text></View>)}
-                        </View>
-                      )
-                    })}
-                  </View>
-                </NeumorphicView>
-              ))}
-            </View>
-          )}
-
-            <TouchableOpacity onPress={handlePublish} disabled={isPublishing} activeOpacity={0.8} style={{ marginBottom: 40 }}>
-              <View style={[styles.publishButton, (questions.length === 0 || isPublishing) && { opacity: 0.5 }]}>
-                <Ionicons name="send" size={20} color="#fff" style={{ marginRight: 10 }} />
-                <Text style={styles.publishButtonText}>{isPublishing ? "Publishing..." : "Publish Quiz"}</Text>
-              </View>
-            </TouchableOpacity>
-          </>
+              <TouchableOpacity onPress={handlePublish} disabled={isPublishing} activeOpacity={0.8} style={{ marginBottom: 40 }}>
+                <View style={[styles.publishButton, (questions.length === 0 || isPublishing) && { opacity: 0.5 }]}>
+                  <Ionicons name="send" size={20} color="#fff" style={{ marginRight: 10 }} />
+                  <Text style={styles.publishButtonText}>{isPublishing ? "Publishing..." : "Publish Quiz"}</Text>
+                </View>
+              </TouchableOpacity>
+            </>
           )}
 
         </ScrollView>

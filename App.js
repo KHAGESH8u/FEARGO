@@ -22,8 +22,8 @@ import StudentMCQ from './screens/StudentMCQ';
 export default function App() {
   const [currentView, setCurrentView] = useState('roleSelection');
   const [sessionCode, setSessionCode] = useState('');
-  const [activeSession, setActiveSession] = useState(null); 
-  const [currentUser, setCurrentUser] = useState(null); 
+  const [activeSession, setActiveSession] = useState(null);
+  const [currentUser, setCurrentUser] = useState(null);
 
   // --- FIX 3: GLOBAL STUDENT RADAR ---
   const [studentSessionId, setStudentSessionId] = useState(null);
@@ -49,34 +49,34 @@ export default function App() {
     const sessionSub = supabase.channel('global:session')
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'sessions', filter: `id=eq.${studentSessionId}` }, (payload) => {
         if (payload.new.is_active === false) {
-           if(Platform.OS === 'web') alert("The teacher has ended this session."); 
-           else Alert.alert("Session Ended", "The teacher has closed this session.");
-           setSessionCode(''); // Clear code
-           setCurrentView('studentJoin'); // Kick to join screen
+          if (Platform.OS === 'web') alert("The teacher has ended this session.");
+          else Alert.alert("Session Ended", "The teacher has closed this session.");
+          setSessionCode(''); // Clear code
+          setCurrentView('studentJoin'); // Kick to join screen
         }
       }).subscribe();
 
     // Listen for Pulse Checks (Auto-Redirect)
     const pulseSub = supabase.channel('global:pulses')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'pulses', filter: `session_id=eq.${studentSessionId}` }, () => {
-         setCurrentView('studentPulseCheck'); 
+        setCurrentView('studentPulseCheck');
       }).subscribe();
 
     // Listen for Quizzes (Show global alert)
     const quizSub = supabase.channel('global:quizzes')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'quizzes', filter: `session_id=eq.${studentSessionId}` }, (payload) => {
-         if (payload.new.is_active) {
-            if(Platform.OS === 'web') {
-               if(window.confirm("Live Quiz Active! The teacher has started a new quiz. Join now?")) {
-                 setCurrentView('studentMCQ');
-               }
-            } else {
-               Alert.alert("Live Quiz Active!", "The teacher has started a new quiz.", [
-                 { text: "Dismiss", style: "cancel" },
-                 { text: "Join Quiz", onPress: () => setCurrentView('studentMCQ') }
-               ]);
+        if (payload.new.is_active) {
+          if (Platform.OS === 'web') {
+            if (window.confirm("Live Quiz Active! The teacher has started a new quiz. Join now?")) {
+              setCurrentView('studentMCQ');
             }
-         }
+          } else {
+            Alert.alert("Live Quiz Active!", "The teacher has started a new quiz.", [
+              { text: "Dismiss", style: "cancel" },
+              { text: "Join Quiz", onPress: () => setCurrentView('studentMCQ') }
+            ]);
+          }
+        }
       }).subscribe();
 
     return () => {
@@ -103,8 +103,8 @@ export default function App() {
     return (
       <TeacherLogin
         onLogin={(user) => {
-          setCurrentUser(user); 
-          setCurrentView('teacherHome'); 
+          setCurrentUser(user);
+          setCurrentView('teacherHome');
         }}
         onBack={() => setCurrentView('roleSelection')}
       />
@@ -114,14 +114,17 @@ export default function App() {
   if (currentView === 'teacherHome') {
     return (
       <TeacherHome
-        user={currentUser} 
+        user={currentUser}
         onCreateSession={(sessionData) => {
-          setActiveSession(sessionData); 
+          setActiveSession(sessionData);
           setCurrentView('liveDashboard');
         }}
-        onViewSummary={() => setCurrentView('sessionSummary')}
+        onViewSummary={(clickedSession) => {
+          setActiveSession(clickedSession); // Actually saves the one you clicked!
+          setCurrentView('sessionSummary');
+        }}
         onBack={() => {
-          setCurrentUser(null); 
+          setCurrentUser(null);
           setCurrentView('roleSelection');
         }}
       />
@@ -130,7 +133,7 @@ export default function App() {
 
   if (currentView === 'liveDashboard') {
     return (
-      <LiveDashboard 
+      <LiveDashboard
         session={activeSession}
         onEndSession={() => setCurrentView('sessionSummary')}
         onBack={() => setCurrentView('teacherHome')}
@@ -142,7 +145,7 @@ export default function App() {
 
   if (currentView === 'teacherQuizCreation') {
     return (
-      <TeacherQuizCreation 
+      <TeacherQuizCreation
         session={activeSession}
         onPublish={() => setCurrentView('liveDashboard')}
         onBack={() => setCurrentView('liveDashboard')}
@@ -152,7 +155,7 @@ export default function App() {
 
   if (currentView === 'teacherQuizResults') {
     return (
-      <TeacherQuizResults 
+      <TeacherQuizResults
         session={activeSession}
         onBack={() => setCurrentView('liveDashboard')}
       />
@@ -161,7 +164,7 @@ export default function App() {
 
   if (currentView === 'sessionSummary') {
     return (
-      <SessionSummary 
+      <SessionSummary
         session={activeSession}
         onRestart={() => setCurrentView('teacherHome')}
         onBack={() => setCurrentView('teacherHome')}
@@ -172,7 +175,7 @@ export default function App() {
   // --- STUDENT ROUTES ---
   if (currentView === 'studentJoin') {
     return (
-      <StudentJoin 
+      <StudentJoin
         onJoin={(code) => {
           setSessionCode(code);
           setCurrentView('studentAskDoubts');
