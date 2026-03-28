@@ -1,54 +1,102 @@
 import React, { useState } from 'react';
-import { View, Text } from 'react-native';
+import { View, Text, SafeAreaView } from 'react-native';
 
-// Import Screens
+// --- IMPORT SCREENS ---
 import RoleSelection from './screens/RoleSelection';
+
+// Teacher Screens
+import TeacherLogin from './screens/TeacherLogin';
 import TeacherHome from './screens/TeacherHome';
 import LiveDashboard from './screens/LiveDashboard';
 import SessionSummary from './screens/SessionSummary';
+import TeacherQuizCreation from './screens/TeacherQuizCreation';
+import TeacherQuizResults from './screens/TeacherQuizResults';
+
+// Student Screens
 import StudentJoin from './screens/StudentJoin';
-import StudentDashboard from './screens/StudentDashboard';
 import StudentAskDoubts from './screens/StudentAskDoubts';
 import StudentPulseCheck from './screens/StudentPulseCheck';
+import StudentMCQ from './screens/StudentMCQ';
 
 export default function App() {
-  // Navigation State
   const [currentView, setCurrentView] = useState('roleSelection');
-  
-  // Shared Data State
   const [sessionCode, setSessionCode] = useState('');
+  const [activeSession, setActiveSession] = useState(null); 
+  
+  // NEW: Store the logged-in teacher's credentials
+  const [currentUser, setCurrentUser] = useState(null); 
 
-  // ==========================
-  // VIEW: ROLE SELECTION
-  // ==========================
   if (currentView === 'roleSelection') {
     return (
       <RoleSelection
         onSelectRole={(role) => {
-          if (role === 'teacher') setCurrentView('teacherHome');
+          // Route teachers to login, route students straight to join
+          if (role === 'teacher') setCurrentView('teacherLogin');
           if (role === 'student') setCurrentView('studentJoin');
         }}
       />
     );
   }
 
-  // ==========================
-  // TEACHER FLOW
-  // ==========================
-  if (currentView === 'teacherHome') {
+  // --- NEW: TEACHER LOGIN ROUTE ---
+  if (currentView === 'teacherLogin') {
     return (
-      <TeacherHome
-        onCreateSession={() => setCurrentView('liveDashboard')}
-        onViewSummary={() => setCurrentView('sessionSummary')}
+      <TeacherLogin
+        onLogin={(user) => {
+          setCurrentUser(user); // Save the Supabase user ID
+          setCurrentView('teacherHome'); // Move to Dashboard
+        }}
         onBack={() => setCurrentView('roleSelection')}
       />
     );
   }
+
+  if (currentView === 'teacherHome') {
+    return (
+      <TeacherHome
+        user={currentUser} // Pass the user to attach to the session
+        onCreateSession={(sessionData) => {
+          setActiveSession(sessionData); 
+          setCurrentView('liveDashboard');
+        }}
+        onViewSummary={() => setCurrentView('sessionSummary')}
+        onBack={() => {
+          setCurrentUser(null); // "Logout" if they go back
+          setCurrentView('roleSelection');
+        }}
+      />
+    );
+  }
+
   if (currentView === 'liveDashboard') {
     return (
       <LiveDashboard 
+        session={activeSession}
         onEndSession={() => setCurrentView('sessionSummary')}
-        onBack={() => setCurrentView('roleSelection')}
+        onBack={() => setCurrentView('teacherHome')}
+        // NEW: Quiz Routing
+        onCreateQuiz={() => setCurrentView('teacherQuizCreation')}
+        onLiveQuiz={() => setCurrentView('teacherQuizResults')}
+      />
+    );
+  }
+
+  // --- NEW: TEACHER QUIZ ROUTES ---
+  if (currentView === 'teacherQuizCreation') {
+    return (
+      <TeacherQuizCreation 
+        session={activeSession}
+        onPublish={() => setCurrentView('liveDashboard')}
+        onBack={() => setCurrentView('liveDashboard')}
+      />
+    );
+  }
+
+  if (currentView === 'teacherQuizResults') {
+    return (
+      <TeacherQuizResults 
+        session={activeSession}
+        onBack={() => setCurrentView('liveDashboard')}
       />
     );
   }
@@ -56,15 +104,14 @@ export default function App() {
   if (currentView === 'sessionSummary') {
     return (
       <SessionSummary 
-        onRestart={() => setCurrentView('liveDashboard')}
-        onBack={() => setCurrentView('liveDashboard')}
+        session={activeSession}
+        onRestart={() => setCurrentView('teacherHome')}
+        onBack={() => setCurrentView('teacherHome')}
       />
     );
   }
 
-  // ==========================
-  // STUDENT FLOW
-  // ==========================
+  // --- STUDENT ROUTES ---
   if (currentView === 'studentJoin') {
     return (
       <StudentJoin 
@@ -86,6 +133,8 @@ export default function App() {
           setCurrentView('studentJoin');
         }}
         onPulseCheck={() => setCurrentView('studentPulseCheck')}
+        // NEW: Navigate to the student MCQ screen when they click the banner
+        onViewQuiz={() => setCurrentView('studentMCQ')}
       />
     );
   }
@@ -103,10 +152,24 @@ export default function App() {
     );
   }
 
-  // Fallback Error Case
+  // --- NEW: STUDENT MCQ ROUTE ---
+  if (currentView === 'studentMCQ') {
+    return (
+      <StudentMCQ
+        sessionCode={sessionCode}
+        onBack={() => setCurrentView('studentAskDoubts')}
+        onLeave={() => {
+          setSessionCode('');
+          setCurrentView('studentJoin');
+        }}
+      />
+    );
+  }
+
+  // Fallback for bad routes
   return (
-    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+    <SafeAreaView style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
       <Text>Error: Unknown Route `{currentView}`</Text>
-    </View>
+    </SafeAreaView>
   );
 }

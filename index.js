@@ -1,3 +1,4 @@
+import 'react-native-url-polyfill/auto'; // <--- THIS IS THE MAGIC LINE
 import { registerRootComponent } from 'expo';
 
 import App from './App';

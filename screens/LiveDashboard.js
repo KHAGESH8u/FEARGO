@@ -1,68 +1,141 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, ScrollView, Dimensions, TouchableOpacity, SafeAreaView, Platform, StatusBar } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, Dimensions, TouchableOpacity, SafeAreaView, Platform, StatusBar, Image } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import Svg, { Circle } from 'react-native-svg';
+import QRCode from 'react-native-qrcode-svg';
 import NeumorphicView from '../components/NeumorphicView';
+import { supabase } from '../utils/supabase';
 
 const { width } = Dimensions.get('window');
 const isLargeScreen = width > 768;
 const cardPadding = isLargeScreen ? 24 : 16;
 const cardMargin = isLargeScreen ? 24 : 12;
 
-export default function LiveDashboard({ onEndSession, onBack }) {
-  // Original Question State
-  const [questions, setQuestions] = useState([
-    { id: 1, text: "I didn't understand the formula in step 3." },
-    { id: 2, text: "Could you repeat the definition of Neumorphism?" },
-  ]);
+// --- DYNAMIC SVG DONUT COMPONENT ---
+const DynamicDonut = ({ gotIt, sortOf, lost, total }) => {
+  const size = 180;
+  const strokeWidth = 30;
+  const center = size / 2;
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
 
-  // --- NEW PULSE SYSTEM STATE ---
+  if (total === 0) {
+    return <Circle cx={center} cy={center} r={radius} stroke="#d1d9e6" strokeWidth={strokeWidth} fill="none" />;
+  }
+
+  const gotItShare = (gotIt / total) * circumference;
+  const sortOfShare = (sortOf / total) * circumference;
+  const lostShare = (lost / total) * circumference;
+
+  return (
+    <Svg width={size} height={size} style={{ transform: [{ rotate: '-90deg' }], position: 'absolute' }}>
+      <Circle cx={center} cy={center} r={radius} fill="none" stroke="#4CAF50" strokeWidth={strokeWidth} strokeDasharray={`${gotItShare} ${circumference}`} />
+      <Circle cx={center} cy={center} r={radius} fill="none" stroke="#FFC107" strokeWidth={strokeWidth} strokeDasharray={`${sortOfShare} ${circumference}`} strokeDashoffset={-gotItShare} />
+      <Circle cx={center} cy={center} r={radius} fill="none" stroke="#FF5C5C" strokeWidth={strokeWidth} strokeDasharray={`${lostShare} ${circumference}`} strokeDashoffset={-(gotItShare + sortOfShare)} />
+    </Svg>
+  );
+};
+
+export default function LiveDashboard({ session, onEndSession, onBack, onCreateQuiz, onLiveQuiz }) {
+  // --- REAL-TIME STATE ---
+  const [questions, setQuestions] = useState([]);
   const [pulseActive, setPulseActive] = useState(false);
+  const [currentPulseId, setCurrentPulseId] = useState(null);
   const [pulseCount, setPulseCount] = useState(0);
   const [pulseHistory, setPulseHistory] = useState([]);
-
-  // Current active data. Total 45 students connected.
   const [responsesCount, setResponsesCount] = useState({ gotIt: 0, sortOf: 0, lost: 0, total: 0 });
+  
+  // NEW: Quiz State (We will link this to Supabase next!)
+  const [quizActive, setQuizActive] = useState(false);
 
-  const handleDismiss = (id) => {
+  const displayCode = session?.code || 'ERROR'; 
+  const sessionId = session?.id;
+
+  // --- SUPABASE SUBSCRIPTIONS ---
+  useEffect(() => {
+    if (!sessionId) return;
+
+    const doubtSub = supabase
+      .channel('public:doubts')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'doubts', filter: `session_id=eq.${sessionId}` }, 
+        (payload) => setQuestions((prev) => [payload.new, ...prev])
+      )
+      .subscribe();
+
+    const responseSub = supabase
+      .channel('public:responses')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'responses' }, 
+        (payload) => {
+          if (payload.new.pulse_id === currentPulseId) {
+            setResponsesCount(prev => {
+              const newStats = { ...prev, total: prev.total + 1 };
+              if (payload.new.status === 'got_it') newStats.gotIt++;
+              if (payload.new.status === 'sort_of') newStats.sortOf++;
+              if (payload.new.status === 'lost') newStats.lost++;
+              return newStats;
+            });
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(doubtSub);
+      supabase.removeChannel(responseSub);
+    };
+  }, [sessionId, currentPulseId]);
+
+  const handleDismiss = async (id) => {
     setQuestions(questions.filter(q => q.id !== id));
+    await supabase.from('doubts').update({ is_answered: true }).eq('id', id);
   };
 
-  const startPulse = () => {
+  const startPulse = async () => {
+    if (!sessionId) { alert("Error: No Active Session ID found!"); return; }
+
     setPulseActive(true);
     setPulseCount(prev => prev + 1);
-    // Hardcoding the request's specific numbers as the "live" snapshot for demo purposes
-    setResponsesCount({ gotIt: 28, sortOf: 10, lost: 7, total: 45 });
+    setResponsesCount({ gotIt: 0, sortOf: 0, lost: 0, total: 0 });
+
+    const { data, error } = await supabase.from('pulses').insert([{ session_id: sessionId, is_open: true }]).select();
+
+    if (error) {
+      console.error("PULSE ERROR:", error);
+      alert("Database Error: Could not start pulse.");
+      setPulseActive(false);
+    } else if (data && data.length > 0) {
+      setCurrentPulseId(data[0].id);
+    }
   };
 
-  // Safe wrapper for calculating percentages
-  const getPercentage = (value, total) => {
-    if (total === 0) return '0%';
-    return Math.round((value / total) * 100) + '%';
-  };
-
-  const endPulse = () => {
+  const endPulse = async () => {
     setPulseActive(false);
+    if (currentPulseId) await supabase.from('pulses').update({ is_open: false }).eq('id', currentPulseId);
 
-    // Save to history log
     if (responsesCount.total > 0) {
       const gotItPct = getPercentage(responsesCount.gotIt, responsesCount.total);
       setPulseHistory([{ id: pulseCount, title: `Topic Feedback`, gotItPct }, ...pulseHistory]);
     }
-
-    // Reset Data for next pulse
-    setResponsesCount({ gotIt: 0, sortOf: 0, lost: 0, total: 0 });
   };
 
-  const isHighConfusion = pulseActive && ((responsesCount.lost / responsesCount.total) > 0.4);
+  const handleEndSession = async () => {
+    if (sessionId) await supabase.from('sessions').update({ is_active: false }).eq('id', sessionId);
+    onEndSession();
+  };
+
+  const getPercentage = (value, total) => total === 0 ? '0%' : Math.round((value / total) * 100) + '%';
+  const isHighConfusion = pulseActive && responsesCount.total > 0 && ((responsesCount.lost / responsesCount.total) > 0.4);
 
   return (
     <SafeAreaView style={styles.safeArea}>
-
-      {/* ── SKY-BLUE HEADER ── */}
+      {/* ── NEW: FEARGO LOGO HEADER ── */}
       <View style={styles.headerBar}>
         <View style={styles.headerLeft}>
-          <Ionicons name="pulse" size={24} color="#fff" />
-          <Text style={styles.headerAppName}>ClassPulse</Text>
+          <Image source={require('../assets/logo.png')} style={{ width: 36, height: 36 }} resizeMode="contain" />
+          <View style={{ marginLeft: 6 }}>
+            <Text style={[styles.headerAppName, { marginLeft: 0 }]}>FearGo</Text>
+            <Text style={{ fontSize: 10, color: 'rgba(255,255,255,0.8)', marginTop: 2 }}>Ask Without Fear.Learn Without Doubt</Text>
+          </View>
         </View>
 
         <TouchableOpacity onPress={onBack} activeOpacity={0.8}>
@@ -73,31 +146,25 @@ export default function LiveDashboard({ onEndSession, onBack }) {
         </TouchableOpacity>
       </View>
 
-      <ScrollView
-        contentContainerStyle={styles.scrollContainer}
-        showsVerticalScrollIndicator={false}
-      >
+      <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
         <View style={styles.maxWidthContainer}>
 
-
-          {/* SECTION 1 — SESSION JOIN CARD */}
+          {/* SESSION JOIN CARD (With Real QR Code) */}
           <NeumorphicView style={[styles.card, { padding: cardPadding }]}>
             <View style={isLargeScreen ? styles.row : styles.column}>
               <View style={[styles.flex1, styles.qrSection]}>
                 <Text style={[styles.cardTitle, { marginBottom: 12 }]}>Scan to Join Session</Text>
                 <NeumorphicView inset={true} style={styles.qrContainer}>
-                  <Ionicons name="qr-code-outline" size={70} color="#2f3542" />
+                  <QRCode value={displayCode} size={90} color="#2f3542" backgroundColor="transparent" />
                 </NeumorphicView>
-                <Text style={styles.secondaryText}>
-                  Students can scan this QR code to join the session instantly.
-                </Text>
+                <Text style={styles.secondaryText}>Students can scan this QR code to join the session instantly.</Text>
               </View>
 
               <View style={[styles.flex1, styles.joinCodeSection]}>
                 <Text style={[styles.cardTitle, { marginBottom: 12 }]}>Session Code</Text>
                 <View style={[styles.codeRow, { marginBottom: 16 }]}>
                   <NeumorphicView style={styles.pillContainer}>
-                    <Text style={styles.largeCodeText} numberOfLines={1} adjustsFontSizeToFit>4821</Text>
+                    <Text style={styles.largeCodeText} numberOfLines={1} adjustsFontSizeToFit>{displayCode}</Text>
                   </NeumorphicView>
                   <TouchableOpacity>
                     <NeumorphicView style={styles.iconButton}>
@@ -105,7 +172,6 @@ export default function LiveDashboard({ onEndSession, onBack }) {
                     </NeumorphicView>
                   </TouchableOpacity>
                 </View>
-
               </View>
             </View>
           </NeumorphicView>
@@ -114,7 +180,7 @@ export default function LiveDashboard({ onEndSession, onBack }) {
           <NeumorphicView style={[styles.card, { padding: cardPadding }, styles.spacingTop]}>
             <View style={{ flexDirection: isLargeScreen ? 'row' : 'column', justifyContent: 'space-between', alignItems: 'center' }}>
               <Text style={[styles.cardTitle, { marginBottom: isLargeScreen ? 0 : 12 }]}>Session Management</Text>
-              <TouchableOpacity onPress={onEndSession}>
+              <TouchableOpacity onPress={handleEndSession}>
                 <NeumorphicView style={[styles.pulseButtonDanger, { paddingVertical: 10, paddingHorizontal: 20 }]}>
                   <Ionicons name="power" size={18} color="#FF5C5C" style={{ marginRight: 8 }} />
                   <Text style={[styles.pulseButtonText, { color: '#FF5C5C', fontSize: 14 }]}>End Session</Text>
@@ -123,24 +189,46 @@ export default function LiveDashboard({ onEndSession, onBack }) {
             </View>
           </NeumorphicView>
 
-          {/* SECTION 2 — SESSION INFO */}
-          <View style={styles.spacingTop}>
-            <NeumorphicView style={[styles.card, { padding: cardPadding }]}>
-              <View style={styles.centerContent}>
-                <Ionicons name="people" size={32} color="#4f8cff" />
-                <Text style={styles.metricNumber} numberOfLines={1} adjustsFontSizeToFit>45</Text>
-                <Text style={styles.cardLabel}>Students Connected</Text>
+          {/* NEW SECTION — QUIZ CONTROL (From Friend's UI) */}
+          <NeumorphicView style={[styles.card, { padding: isLargeScreen ? 16 : 12 }, styles.spacingTop]}>
+            <View style={{ flexDirection: isLargeScreen ? 'row' : 'column', justifyContent: 'space-between', alignItems: isLargeScreen ? 'center' : 'flex-start' }}>
+              <View style={{ marginBottom: isLargeScreen ? 0 : 10 }}>
+                <Text style={[styles.cardTitle, { marginBottom: 4, textAlign: 'left', fontSize: isLargeScreen ? 18 : 16 }]}>Live Quiz</Text>
+                <View style={[styles.statusRow, { marginBottom: 0 }]}>
+                  <Text style={styles.cardLabelSmall}>Status:  </Text>
+                  {quizActive ? (
+                    <View style={[styles.quizBadgeActive, { paddingVertical: 2, paddingHorizontal: 8 }]}>
+                      <View style={[styles.glowingDot, { backgroundColor: '#4f8cff', width: 6, height: 6, borderRadius: 3 }]} />
+                      <Text style={[styles.statusTextActive, { fontSize: 13 }]}>Quiz Active</Text>
+                    </View>
+                  ) : (
+                    <Text style={[styles.statusTextClosed, { fontSize: 13 }]}>No active quiz</Text>
+                  )}
+                </View>
               </View>
-            </NeumorphicView>
-          </View>
 
-          {/* NEW SECTION — PULSE CONTROL PANEL */}
+              <View style={{ flexDirection: isLargeScreen ? 'row' : 'column', gap: 8, marginTop: isLargeScreen ? 0 : 10, width: isLargeScreen ? 'auto' : '100%' }}>
+                <TouchableOpacity onPress={onLiveQuiz} style={isLargeScreen ? {} : { width: '100%' }}>
+                  <NeumorphicView style={[styles.pulseButtonPrimary, { paddingVertical: 10, paddingHorizontal: 16 }]}>
+                    <Ionicons name="bar-chart" size={18} color="#4f8cff" style={{ marginRight: 6 }} />
+                    <Text style={[styles.pulseButtonText, { fontSize: 14 }]} numberOfLines={1}>Live Quiz</Text>
+                  </NeumorphicView>
+                </TouchableOpacity>
+
+                <TouchableOpacity onPress={onCreateQuiz} style={isLargeScreen ? {} : { width: '100%' }}>
+                  <NeumorphicView style={[styles.pulseButtonPrimary, { paddingVertical: 10, paddingHorizontal: 16 }]}>
+                    <Ionicons name="add-circle" size={18} color="#4f8cff" style={{ marginRight: 6 }} />
+                    <Text style={[styles.pulseButtonText, { fontSize: 14 }]} numberOfLines={1}>Create Quiz</Text>
+                  </NeumorphicView>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </NeumorphicView>
+
+          {/* PULSE CONTROL PANEL */}
           <NeumorphicView style={[styles.card, { padding: cardPadding }, styles.spacingTop]}>
             <Text style={styles.cardTitle}>Pulse Check Control</Text>
-
             <View style={[isLargeScreen ? styles.row : styles.column, { alignItems: 'center', justifyContent: 'space-between' }]}>
-
-              {/* Primary Action Button */}
               <TouchableOpacity onPress={pulseActive ? endPulse : startPulse} style={isLargeScreen ? { flex: 1 } : { width: '100%', marginBottom: 20 }}>
                 <NeumorphicView style={pulseActive ? styles.pulseButtonDanger : styles.pulseButtonPrimary}>
                   <Ionicons name="pulse" size={24} color={pulseActive ? "#FF5C5C" : "#4f8cff"} style={{ marginRight: 8 }} />
@@ -150,7 +238,6 @@ export default function LiveDashboard({ onEndSession, onBack }) {
                 </NeumorphicView>
               </TouchableOpacity>
 
-              {/* Status Display */}
               <View style={[styles.centerContent, isLargeScreen ? { flex: 1 } : { width: '100%', marginBottom: 20 }]}>
                 <View style={styles.statusRow}>
                   <Text style={styles.cardLabel}>Pulse Status:  </Text>
@@ -164,28 +251,22 @@ export default function LiveDashboard({ onEndSession, onBack }) {
                   )}
                 </View>
                 <Text style={styles.secondaryText}>
-                  Responses Received: {pulseActive ? responsesCount.total : 0} / 45
+                  Live Responses: {responsesCount.total}
                 </Text>
               </View>
-
             </View>
           </NeumorphicView>
 
-          {/* SECTION 3 — LIVE COMPREHENSION CARDS */}
+          {/* NEW: Pulse History Label (Friend's Addition) */}
           {pulseActive && (
             <Text style={[styles.pulseHistoryLabel, { textAlign: 'center', marginBottom: 12 }]}>
               Pulse #{pulseCount} — Topic Feedback
             </Text>
           )}
 
+          {/* LIVE COMPREHENSION CARDS */}
           <View style={[isLargeScreen ? styles.row : styles.rowWrap, styles.spacingTop]}>
-
-            {/* GOT IT */}
-            <NeumorphicView
-              style={[styles.smallCard, styles.flex1, { opacity: pulseActive ? 1 : 0.4 }, isLargeScreen ? { marginRight: cardMargin } : styles.mobileCardMargin]}
-              isGlow={pulseActive}
-              glowColor="#4CAF50"
-            >
+            <NeumorphicView style={[styles.smallCard, styles.flex1, { opacity: pulseActive ? 1 : 0.4 }, isLargeScreen ? { marginRight: cardMargin } : styles.mobileCardMargin]} isGlow={pulseActive} glowColor="#4CAF50">
               <View style={styles.centerContent}>
                 <Ionicons name="checkmark-circle" size={28} color="#4CAF50" />
                 {pulseActive ? (
@@ -196,17 +277,12 @@ export default function LiveDashboard({ onEndSession, onBack }) {
                     <Text style={styles.percentageText}>{getPercentage(responsesCount.gotIt, responsesCount.total)}</Text>
                   </>
                 ) : (
-                  <View style={{ height: 80, justifyContent: 'center' }}>
-                    <Text style={styles.waitingText}>Waiting for{'\n'}Pulse Check</Text>
-                  </View>
+                  <View style={{ height: 80, justifyContent: 'center' }}><Text style={styles.waitingText}>Waiting for{'\n'}Pulse Check</Text></View>
                 )}
               </View>
             </NeumorphicView>
 
-            {/* SORT OF */}
-            <NeumorphicView
-              style={[styles.smallCard, styles.flex1, { opacity: pulseActive ? 1 : 0.4 }, isLargeScreen ? { marginRight: cardMargin } : styles.mobileCardMargin]}
-            >
+            <NeumorphicView style={[styles.smallCard, styles.flex1, { opacity: pulseActive ? 1 : 0.4 }, isLargeScreen ? { marginRight: cardMargin } : styles.mobileCardMargin]}>
               <View style={styles.centerContent}>
                 <MaterialCommunityIcons name="head-lightbulb-outline" size={28} color="#FFC107" />
                 {pulseActive ? (
@@ -217,17 +293,12 @@ export default function LiveDashboard({ onEndSession, onBack }) {
                     <Text style={styles.percentageText}>{getPercentage(responsesCount.sortOf, responsesCount.total)}</Text>
                   </>
                 ) : (
-                  <View style={{ height: 80, justifyContent: 'center' }}>
-                    <Text style={styles.waitingText}>Waiting for{'\n'}Pulse Check</Text>
-                  </View>
+                  <View style={{ height: 80, justifyContent: 'center' }}><Text style={styles.waitingText}>Waiting for{'\n'}Pulse Check</Text></View>
                 )}
               </View>
             </NeumorphicView>
 
-            {/* LOST */}
-            <NeumorphicView
-              style={[styles.smallCard, styles.flex1, { opacity: pulseActive ? 1 : 0.4 }, isLargeScreen ? {} : styles.mobileCardMargin]}
-            >
+            <NeumorphicView style={[styles.smallCard, styles.flex1, { opacity: pulseActive ? 1 : 0.4 }, isLargeScreen ? {} : styles.mobileCardMargin]}>
               <View style={styles.centerContent}>
                 <Ionicons name="alert-circle" size={28} color="#FF5C5C" />
                 {pulseActive ? (
@@ -238,30 +309,18 @@ export default function LiveDashboard({ onEndSession, onBack }) {
                     <Text style={styles.percentageText}>{getPercentage(responsesCount.lost, responsesCount.total)}</Text>
                   </>
                 ) : (
-                  <View style={{ height: 80, justifyContent: 'center' }}>
-                    <Text style={styles.waitingText}>Waiting for{'\n'}Pulse Check</Text>
-                  </View>
+                  <View style={{ height: 80, justifyContent: 'center' }}><Text style={styles.waitingText}>Waiting for{'\n'}Pulse Check</Text></View>
                 )}
               </View>
             </NeumorphicView>
           </View>
 
-          {/* SECTION 4 — LIVE UNDERSTANDING CHART */}
+          {/* LIVE UNDERSTANDING CHART (Dynamic SVG) */}
           <NeumorphicView style={[styles.card, { padding: cardPadding, opacity: pulseActive ? 1 : 0.5 }, styles.spacingTop]}>
             <Text style={styles.cardTitle}>Pulse Check Results</Text>
-
             <View style={styles.chartContainer}>
               <NeumorphicView style={styles.donutOuter}>
-                {/* Show empty gray circle if inactive, otherwise show colored fragments */}
-                {!pulseActive ? (
-                  <View style={[styles.donutMaskGreen, { borderColor: '#d1d9e6', borderWidth: 80 }]} />
-                ) : (
-                  <>
-                    <View style={styles.donutMaskGreen} />
-                    <View style={styles.donutMaskYellow} />
-                    <View style={styles.donutMaskRed} />
-                  </>
-                )}
+                <DynamicDonut {...responsesCount} />
                 <NeumorphicView style={styles.donutInner} />
               </NeumorphicView>
 
@@ -273,7 +332,7 @@ export default function LiveDashboard({ onEndSession, onBack }) {
             </View>
           </NeumorphicView>
 
-          {/* SECTION 5 — CONFUSION ALERT (Conditionally Visible) */}
+          {/* CONFUSION ALERT */}
           {isHighConfusion && (
             <NeumorphicView style={[styles.card, { padding: cardPadding }, styles.spacingTop]} isGlow={true} glowColor="#FFC107">
               <View style={styles.alertRow}>
@@ -290,7 +349,7 @@ export default function LiveDashboard({ onEndSession, onBack }) {
             </NeumorphicView>
           )}
 
-          {/* NEW SECTION — PULSE HISTORY (Optional Display) */}
+          {/* NEW SECTION — PULSE HISTORY (Friend's Addition) */}
           <NeumorphicView style={[styles.card, { padding: cardPadding }, styles.spacingTop]}>
             <Text style={styles.cardTitle}>Pulse History</Text>
             <View style={styles.questionsContainer}>
@@ -308,7 +367,7 @@ export default function LiveDashboard({ onEndSession, onBack }) {
             </View>
           </NeumorphicView>
 
-          {/* SECTION 6 — ANONYMOUS QUESTION QUEUE */}
+          {/* ANONYMOUS QUESTION QUEUE */}
           <NeumorphicView style={[styles.card, { padding: cardPadding }, styles.spacingTop]}>
             <Text style={styles.cardTitle}>Anonymous Questions</Text>
             <View style={styles.questionsContainer}>
@@ -317,16 +376,11 @@ export default function LiveDashboard({ onEndSession, onBack }) {
               ) : (
                 questions.map((q) => (
                   <NeumorphicView key={q.id} style={styles.questionCard}>
-                    <Text style={styles.questionText}>"{q.text}"</Text>
+                    <Text style={styles.questionText}>"{q.content || q.text}"</Text>
                     <View style={styles.questionActions}>
-                      <TouchableOpacity>
-                        <NeumorphicView style={styles.actionButton}>
-                          <Text style={styles.actionButtonText}>Answer</Text>
-                        </NeumorphicView>
-                      </TouchableOpacity>
                       <TouchableOpacity onPress={() => handleDismiss(q.id)}>
                         <NeumorphicView style={styles.actionButtonSecondary}>
-                          <Text style={styles.actionButtonTextSecondary}>Dismiss</Text>
+                          <Text style={styles.actionButtonTextSecondary}>Dismiss / Answered</Text>
                         </NeumorphicView>
                       </TouchableOpacity>
                     </View>
@@ -344,33 +398,14 @@ export default function LiveDashboard({ onEndSession, onBack }) {
 }
 
 const styles = StyleSheet.create({
-  // ── Sky-Blue Header ──
-  headerBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 10 : 12,
-    paddingBottom: 14,
-    backgroundColor: '#0ea5e9',
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
-    shadowColor: '#0ea5e9',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
-    elevation: 10,
-  },
+  headerBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 10 : 12, paddingBottom: 14, backgroundColor: '#0ea5e9', borderBottomLeftRadius: 20, borderBottomRightRadius: 20, shadowColor: '#0ea5e9', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 12, elevation: 10, },
   headerLeft: { flexDirection: 'row', alignItems: 'center' },
   headerAppName: { fontSize: 18, fontWeight: 'bold', color: '#fff', marginLeft: 8, letterSpacing: 0.5 },
-  headerPageTitle: { fontSize: 16, fontWeight: '600', color: 'rgba(0, 0, 0, 0.9)', padding: 10 },
   backPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
   backPillText: { fontSize: 13, fontWeight: 'bold', color: '#fff' },
-
   safeArea: { flex: 1, backgroundColor: '#e0e5ec' },
   scrollContainer: { padding: Platform.OS === 'web' ? 40 : 16, alignItems: 'center', backgroundColor: '#e0e5ec', minHeight: '100%' },
   maxWidthContainer: { width: '100%', maxWidth: 1200 },
-  pageTitle: { fontSize: isLargeScreen ? 28 : 22, fontWeight: 'bold', color: '#2f3542', fontFamily: Platform.OS === 'ios' ? 'Inter' : 'sans-serif', marginBottom: isLargeScreen ? 40 : 20, marginTop: isLargeScreen ? 0 : 20, textAlign: isLargeScreen ? 'left' : 'center' },
   card: { borderRadius: 24, marginBottom: isLargeScreen ? 24 : 16 },
   smallCard: { borderRadius: 20, padding: 12, marginBottom: isLargeScreen ? 24 : 16 },
   cardTitle: { fontSize: isLargeScreen ? 20 : 18, fontWeight: 'bold', color: '#2f3542', marginBottom: 16, textAlign: isLargeScreen ? 'left' : 'center' },
@@ -380,24 +415,20 @@ const styles = StyleSheet.create({
   flex1: { flex: 1, minWidth: isLargeScreen ? 0 : 90 },
   mobileCardMargin: { marginHorizontal: 4 },
   spacingTop: { marginTop: 0 },
-  spacingMedium: { height: 24 },
   centerContent: { alignItems: 'center', justifyContent: 'center' },
-
-  // Custom Pulse Elements
   pulseButtonPrimary: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 16, paddingHorizontal: 24, borderRadius: 30, backgroundColor: '#e0e5ec' },
   pulseButtonDanger: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 16, paddingHorizontal: 24, borderRadius: 30, backgroundColor: '#e0e5ec' },
   pulseButtonText: { fontSize: 18, fontWeight: 'bold', color: '#4f8cff' },
   statusRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
   statusBadgeActive: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#e0ebf6', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12, borderWidth: 1, borderColor: '#4f8cff33' },
+  quizBadgeActive: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#e6f0ff', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, borderWidth: 1, borderColor: '#4f8cff33' },
   glowingDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#4f8cff', marginRight: 6 },
   statusTextActive: { fontSize: 16, fontWeight: 'bold', color: '#4f8cff' },
   statusTextClosed: { fontSize: 16, fontWeight: 'bold', color: '#6b7280' },
-  timerText: { fontSize: 32, fontWeight: 'bold', color: '#2f3542', letterSpacing: 2 },
   waitingText: { textAlign: 'center', fontSize: 13, color: '#6b7280', fontWeight: 'bold', fontStyle: 'italic' },
   subtitleText: { fontSize: 12, color: '#6b7280', marginTop: 4 },
   pulseHistoryLabel: { fontSize: 14, fontWeight: 'bold', color: '#4f8cff', letterSpacing: 1 },
   historyRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#d1d9e6' },
-
   qrSection: { alignItems: 'center', borderRightWidth: isLargeScreen ? 1 : 0, borderBottomWidth: isLargeScreen ? 0 : 1, borderColor: '#d1d9e6', paddingRight: isLargeScreen ? 24 : 0, paddingBottom: isLargeScreen ? 0 : 16, marginBottom: isLargeScreen ? 0 : 16 },
   qrContainer: { width: 120, height: 120, borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
   secondaryText: { fontSize: 14, color: '#6b7280', textAlign: 'center', paddingHorizontal: 8 },
@@ -406,22 +437,10 @@ const styles = StyleSheet.create({
   pillContainer: { borderRadius: 30, paddingVertical: 10, paddingHorizontal: 20, marginRight: 12, maxWidth: 150 },
   largeCodeText: { fontSize: isLargeScreen ? 32 : 24, fontWeight: 'bold', color: '#2f3542', textAlign: 'center' },
   iconButton: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-  linkRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  linkText: { fontSize: isLargeScreen ? 18 : 16, color: '#4f8cff', fontWeight: '600', marginRight: 12 },
-  iconButtonSmall: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   metricNumber: { fontSize: isLargeScreen ? 36 : 28, fontWeight: 'bold', color: '#2f3542', marginVertical: 4, textAlign: 'center' },
   cardLabel: { fontSize: isLargeScreen ? 16 : 14, fontWeight: '600', color: '#2f3542', textAlign: 'center' },
   cardLabelSmall: { fontSize: 12, fontWeight: '600', color: '#2f3542', textAlign: 'center' },
   percentageText: { fontSize: 14, fontWeight: 'bold', color: '#6b7280', marginTop: 4 },
-  chartContainer: { alignItems: 'center', marginVertical: 16 },
-  donutOuter: { width: 180, height: 180, borderRadius: 90, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative' },
-  donutInner: { width: 110, height: 110, borderRadius: 55, backgroundColor: '#e0e5ec', zIndex: 10 },
-  donutMaskGreen: { position: 'absolute', width: 180, height: 180, borderRadius: 90, borderWidth: 30, borderColor: '#4CAF50', borderBottomColor: 'transparent', borderRightColor: 'transparent', transform: [{ rotate: '45deg' }] },
-  donutMaskYellow: { position: 'absolute', width: 180, height: 180, borderRadius: 90, borderWidth: 30, borderColor: '#FFC107', borderTopColor: 'transparent', borderLeftColor: 'transparent', transform: [{ rotate: '45deg' }] },
-  donutMaskRed: { position: 'absolute', width: 180, height: 180, borderRadius: 90, borderWidth: 30, borderColor: '#FF5C5C', borderTopColor: 'transparent', borderRightColor: 'transparent', transform: [{ rotate: '-45deg' }] },
-  legendContainer: { flexDirection: 'row', marginTop: 24, justifyContent: 'center', width: '100%', flexWrap: 'wrap', gap: 16 },
-  legendItem: { flexDirection: 'row', alignItems: 'center' },
-  legendDot: { width: 10, height: 10, borderRadius: 5, marginRight: 6 },
   alertRow: { flexDirection: 'row', alignItems: 'center' },
   alertIcon: { marginRight: 12 },
   alertTitle: { fontSize: 16, fontWeight: 'bold', color: '#2f3542', marginBottom: 4 },
@@ -430,8 +449,12 @@ const styles = StyleSheet.create({
   questionCard: { padding: 16, borderRadius: 16, marginBottom: 16, flexDirection: 'column', alignItems: 'flex-start' },
   questionText: { fontSize: 14, color: '#2f3542', fontStyle: 'italic', marginBottom: 16 },
   questionActions: { flexDirection: 'row', gap: 10 },
-  actionButton: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, marginRight: 8 },
-  actionButtonText: { color: '#4CAF50', fontWeight: 'bold', fontSize: 12 },
   actionButtonSecondary: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12 },
-  actionButtonTextSecondary: { color: '#6b7280', fontWeight: 'bold', fontSize: 12 }
+  actionButtonTextSecondary: { color: '#6b7280', fontWeight: 'bold', fontSize: 12 },
+  chartContainer: { alignItems: 'center', marginVertical: 16 },
+  donutOuter: { width: 180, height: 180, borderRadius: 90, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative' },
+  donutInner: { width: 110, height: 110, borderRadius: 55, backgroundColor: '#e0e5ec', zIndex: 10 },
+  legendContainer: { flexDirection: 'row', marginTop: 24, justifyContent: 'center', width: '100%', flexWrap: 'wrap', gap: 16 },
+  legendItem: { flexDirection: 'row', alignItems: 'center' },
+  legendDot: { width: 10, height: 10, borderRadius: 5, marginRight: 6 },
 });
