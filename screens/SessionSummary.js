@@ -319,20 +319,41 @@ export default function SessionSummary({ session, onRestart, onBack }) {
     </NeumorphicView>
   );
 
-  // SECTION 8 — KEY INSIGHTS PANEL (Static UI kept exactly as you designed)
-  const renderInsights = () => (
-    <NeumorphicView style={[styles.card, { padding: cardPadding }]} isGlow={true} glowColor="#4f8cff">
-      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-        <Ionicons name="sparkles" size={24} color="#4f8cff" style={{ marginRight: 10 }} />
-        <Text style={styles.cardTitle}>Key Insights</Text>
-      </View>
+  // SECTION 8 — KEY INSIGHTS PANEL (Now Dynamic!)
+  const renderInsights = () => {
+    // Dynamically calculate insights based on the real data
+    const highestConfusionPulse = timelineData.length > 0
+      ? [...timelineData].sort((a, b) => b.lost - a.lost)[0]
+      : null;
 
-      <View style={styles.insightBullet}><Ionicons name="ellipse" size={8} color="#4f8cff" style={styles.bulletIcon} /><Text style={styles.insightText}>Most confusion occurred during Pulse 3.</Text></View>
-      <View style={styles.insightBullet}><Ionicons name="ellipse" size={8} color="#FF5C5C" style={styles.bulletIcon} /><Text style={styles.insightText}>25% of students were completely lost during Example Problems.</Text></View>
-      <View style={styles.insightBullet}><Ionicons name="ellipse" size={8} color="#4CAF50" style={styles.bulletIcon} /><Text style={styles.insightText}>Engagement stayed enthusiastically above 85% for most of the lecture.</Text></View>
-      <View style={styles.insightBullet}><Ionicons name="ellipse" size={8} color="#4f8cff" style={styles.bulletIcon} /><Text style={styles.insightText}>Students asked the most questions during the Core Concept explanation.</Text></View>
-    </NeumorphicView>
-  );
+    const insight1 = highestConfusionPulse
+      ? `Highest confusion occurred during Pulse ${highestConfusionPulse.number}.`
+      : "No pulse checks were run during this session.";
+
+    const insight2 = overall.gotIt >= 70
+      ? `Great job! ${overall.gotIt}% of the class understood the core material.`
+      : `Class struggled slightly. Only ${overall.gotIt}% fully understood.`;
+
+    const insight3 = stats.responseRate > 80
+      ? "Student engagement was outstandingly high today!"
+      : `Engagement was at ${stats.responseRate}%. Try running more pulses.`;
+
+    const insight4 = `${stats.questions} anonymous doubts were submitted by students.`;
+
+    return (
+      <NeumorphicView style={[styles.card, { padding: cardPadding }]} isGlow={true} glowColor="#4f8cff">
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+          <Ionicons name="sparkles" size={24} color="#4f8cff" style={{ marginRight: 10 }} />
+          <Text style={styles.cardTitle}>Key Insights</Text>
+        </View>
+
+        <View style={styles.insightBullet}><Ionicons name="ellipse" size={8} color="#FF5C5C" style={styles.bulletIcon} /><Text style={styles.insightText}>{insight1}</Text></View>
+        <View style={styles.insightBullet}><Ionicons name="ellipse" size={8} color="#4CAF50" style={styles.bulletIcon} /><Text style={styles.insightText}>{insight2}</Text></View>
+        <View style={styles.insightBullet}><Ionicons name="ellipse" size={8} color="#FFC107" style={styles.bulletIcon} /><Text style={styles.insightText}>{insight3}</Text></View>
+        <View style={styles.insightBullet}><Ionicons name="ellipse" size={8} color="#4f8cff" style={styles.bulletIcon} /><Text style={styles.insightText}>{insight4}</Text></View>
+      </NeumorphicView>
+    );
+  };
 
   // SECTION 9 — EXPORT AND ACTION BUTTONS
   const renderActions = () => (

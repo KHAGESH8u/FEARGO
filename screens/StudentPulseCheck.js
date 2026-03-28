@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   StyleSheet, Text, View, SafeAreaView, TouchableOpacity,
-  ScrollView, Dimensions, Platform, StatusBar, TextInput
+  ScrollView, Dimensions, Platform, StatusBar, TextInput, KeyboardAvoidingView
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import NeumorphicView from '../components/NeumorphicView';
@@ -22,12 +22,10 @@ export default function StudentPulseCheck({ sessionCode, onLeave, onBack }) {
 
   useEffect(() => {
     const fetchRealPulse = async () => {
-      // 1. Get Session ID
       const { data: sessionData } = await supabase.from('sessions').select('id').eq('code', sessionCode).single();
       if (!sessionData) return;
       setSessionId(sessionData.id);
 
-      // 2. Get the currently active Pulse ID for this session
       const { data: pulseData } = await supabase.from('pulses').select('id').eq('session_id', sessionData.id).eq('is_open', true).order('created_at', { ascending: false }).limit(1);
       if (pulseData && pulseData.length > 0) {
         setActivePulseId(pulseData[0].id);
@@ -43,7 +41,8 @@ export default function StudentPulseCheck({ sessionCode, onLeave, onBack }) {
     // Send the signal to the teacher immediately
     await supabase.from('responses').insert([{ pulse_id: activePulseId, status: option }]);
 
-    if (option === 'lost') {
+    // Both Lost AND Sort Of trigger the doubt box
+    if (option === 'lost' || option === 'sort_of') {
       setShowDoubtBox(true);
     } else {
       setSubmitted(true);
@@ -80,69 +79,80 @@ export default function StudentPulseCheck({ sessionCode, onLeave, onBack }) {
         </TouchableOpacity>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
-        <View style={styles.instructionSection}>
-          <View style={styles.pulseBadge}>
-            <View style={styles.pulseDot} />
-            <Text style={styles.pulseBadgeText}>LIVE PULSE CHECK</Text>
+      {/* FIX 2: WRAPPED IN KEYBOARD AVOIDING VIEW */}
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          <View style={styles.instructionSection}>
+            <View style={styles.pulseBadge}>
+              <View style={styles.pulseDot} />
+              <Text style={styles.pulseBadgeText}>LIVE PULSE CHECK</Text>
+            </View>
+            <Text style={styles.pageTitle}>Pulse Check</Text>
+            <Text style={styles.pageSubtitle}>How well did you understand the topic just explained?</Text>
           </View>
-          <Text style={styles.pageTitle}>Pulse Check</Text>
-          <Text style={styles.pageSubtitle}>How well did you understand the topic just explained?</Text>
-        </View>
 
-        {submitted ? (
-          <NeumorphicView style={styles.confirmationCard}>
-            <View style={styles.confirmIconWrapper}>
-              <Ionicons name="checkmark-circle" size={64} color={OPTIONS.find(o => o.key === selectedOption)?.color || '#4CAF50'} />
-            </View>
-            <Text style={styles.confirmTitle}>Response Submitted!</Text>
-            <Text style={styles.confirmSubtext}>
-              You selected: <Text style={{ fontWeight: 'bold', color: OPTIONS.find(o => o.key === selectedOption)?.color }}>{OPTIONS.find(o => o.key === selectedOption)?.label}</Text>
-            </Text>
-            {selectedOption === 'lost' && doubtText.length > 0 && (
-              <Text style={[styles.confirmSubtext, { marginTop: 8 }]}>Your doubt has been sent to the teacher.</Text>
-            )}
-            <Text style={[styles.confirmSubtext, { marginTop: 16 }]}>You can go back to Ask Doubts while waiting for the next pulse.</Text>
-          </NeumorphicView>
-        ) : (
-          <>
-            <View style={styles.optionsContainer}>
-              {OPTIONS.map((opt) => {
-                const isSelected = selectedOption === opt.key;
-                return (
-                  <TouchableOpacity key={opt.key} onPress={() => handleSelect(opt.key)} activeOpacity={0.8} style={{ width: '100%' }}>
-                    <NeumorphicView style={[ styles.optionCard, isSelected && { borderColor: opt.color, borderWidth: 2 } ]} inset={isSelected} isGlow={isSelected} glowColor={opt.color}>
-                      <View style={[styles.optionIconBox, { backgroundColor: opt.bgLight }]}>{opt.icon}</View>
-                      <View style={styles.optionTextBlock}>
-                        <Text style={[styles.optionLabel, { color: opt.color }]}>{opt.label}</Text>
-                        <Text style={styles.optionDescription}>{opt.description}</Text>
-                      </View>
-                      <Ionicons name={isSelected ? "radio-button-on" : "radio-button-off"} size={24} color={isSelected ? opt.color : '#c8d4e0'} />
-                    </NeumorphicView>
+          {submitted ? (
+            <NeumorphicView style={styles.confirmationCard}>
+              <View style={styles.confirmIconWrapper}>
+                <Ionicons name="checkmark-circle" size={64} color={OPTIONS.find(o => o.key === selectedOption)?.color || '#4CAF50'} />
+              </View>
+              <Text style={styles.confirmTitle}>Response Submitted!</Text>
+              <Text style={styles.confirmSubtext}>
+                You selected: <Text style={{ fontWeight: 'bold', color: OPTIONS.find(o => o.key === selectedOption)?.color }}>{OPTIONS.find(o => o.key === selectedOption)?.label}</Text>
+              </Text>
+              {(selectedOption === 'lost' || selectedOption === 'sort_of') && doubtText.length > 0 && (
+                <Text style={[styles.confirmSubtext, { marginTop: 8 }]}>Your doubt has been sent to the teacher.</Text>
+              )}
+              <Text style={[styles.confirmSubtext, { marginTop: 16 }]}>You can go back to Ask Doubts while waiting for the next pulse.</Text>
+            </NeumorphicView>
+          ) : (
+            <>
+              <View style={styles.optionsContainer}>
+                {OPTIONS.map((opt) => {
+                  const isSelected = selectedOption === opt.key;
+                  return (
+                    <TouchableOpacity key={opt.key} onPress={() => handleSelect(opt.key)} activeOpacity={0.8} style={{ width: '100%' }}>
+                      <NeumorphicView style={[ styles.optionCard, isSelected && { borderColor: opt.color, borderWidth: 2 } ]} inset={isSelected} isGlow={isSelected} glowColor={opt.color}>
+                        <View style={[styles.optionIconBox, { backgroundColor: opt.bgLight }]}>{opt.icon}</View>
+                        <View style={styles.optionTextBlock}>
+                          <Text style={[styles.optionLabel, { color: opt.color }]}>{opt.label}</Text>
+                          <Text style={styles.optionDescription}>{opt.description}</Text>
+                        </View>
+                        <Ionicons name={isSelected ? "radio-button-on" : "radio-button-off"} size={24} color={isSelected ? opt.color : '#c8d4e0'} />
+                      </NeumorphicView>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {showDoubtBox && (
+                <NeumorphicView style={styles.doubtCard}>
+                  <Text style={[styles.doubtTitle, { color: OPTIONS.find(o => o.key === selectedOption)?.color }]}>
+                    {selectedOption === 'sort_of' ? "What part was confusing?" : "Don’t worry, ask your doubt"}
+                  </Text>
+                  <Text style={styles.doubtSubtitle}>Send your question anonymously to the teacher.</Text>
+                  <TextInput 
+                    style={styles.doubtInput} 
+                    placeholder="Type your doubt here..." 
+                    placeholderTextColor="#94a3b8" 
+                    multiline 
+                    value={doubtText} 
+                    onChangeText={setDoubtText} 
+                  />
+                  <TouchableOpacity style={[styles.submitDoubtButton, { backgroundColor: OPTIONS.find(o => o.key === selectedOption)?.color || '#4f8cff' }]} onPress={handleSubmitDoubt} activeOpacity={0.85}>
+                    <Text style={styles.submitDoubtText}>Submit Doubt</Text>
                   </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            {showDoubtBox && (
-              <NeumorphicView style={styles.doubtCard}>
-                <Text style={styles.doubtTitle}>Don’t worry, ask your doubt</Text>
-                <Text style={styles.doubtSubtitle}>Send your question anonymously to the teacher.</Text>
-                <TextInput style={styles.doubtInput} placeholder="Type your doubt here..." placeholderTextColor="#94a3b8" multiline value={doubtText} onChangeText={setDoubtText} />
-                <TouchableOpacity style={styles.submitDoubtButton} onPress={handleSubmitDoubt} activeOpacity={0.85}>
-                  <Text style={styles.submitDoubtText}>Submit Doubt</Text>
-                </TouchableOpacity>
-              </NeumorphicView>
-            )}
-          </>
-        )}
-        <View style={{ height: 40 }} />
-      </ScrollView>
+                </NeumorphicView>
+              )}
+            </>
+          )}
+          <View style={{ height: 40 }} />
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-// STYLES ARE 100% UNTOUCHED
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#e0e5ec' },
   headerBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 10 : 12, paddingBottom: 14, backgroundColor: '#0ea5e9', borderBottomLeftRadius: 20, borderBottomRightRadius: 20, },
@@ -168,9 +178,9 @@ const styles = StyleSheet.create({
   confirmTitle: { fontSize: 22, fontWeight: 'bold', color: '#2f3542' },
   confirmSubtext: { fontSize: 15, color: '#6b7280', textAlign: 'center' },
   doubtCard: { borderRadius: 24, padding: 24, width: '100%' },
-  doubtTitle: { fontSize: 18, fontWeight: 'bold', color: '#FF5C5C', marginBottom: 6 },
+  doubtTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 6 },
   doubtSubtitle: { fontSize: 13, color: '#6b7280', marginBottom: 12 },
   doubtInput: { backgroundColor: '#e0e5ec', borderRadius: 16, padding: 14, minHeight: 100, textAlignVertical: 'top', marginBottom: 14 },
-  submitDoubtButton: { backgroundColor: '#4f8cff', paddingVertical: 12, borderRadius: 18, alignItems: 'center' },
+  submitDoubtButton: { paddingVertical: 12, borderRadius: 18, alignItems: 'center' },
   submitDoubtText: { color: '#fff', fontWeight: 'bold' }
 });

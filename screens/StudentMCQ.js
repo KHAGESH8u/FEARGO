@@ -6,6 +6,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import NeumorphicView from '../components/NeumorphicView';
 import { supabase } from '../utils/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width } = Dimensions.get('window');
 const isLargeScreen = width > 768;
@@ -17,26 +18,49 @@ export default function StudentMCQ({ sessionCode, onLeave, onBack }) {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [selectedAnswers, setSelectedAnswers] = useState({});
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [deviceId, setDeviceId] = useState(null);
 
-  // --- NEW: FETCH FROM SUPABASE ---
   useEffect(() => {
-    fetchActiveQuiz();
-  }, [sessionCode]);
-
-  const fetchActiveQuiz = async () => {
-    setIsLoading(true);
-    // 1. Get Session ID
-    const { data: sessionData } = await supabase.from('sessions').select('id').eq('code', sessionCode).single();
-    
-    if (sessionData) {
-      // 2. Get Active Quizzes for this session
-      const { data: quizData } = await supabase.from('quizzes').select('*').eq('session_id', sessionData.id).eq('is_active', true);
-      if (quizData) {
-        setQuestions(quizData);
+    const initializeQuiz = async () => {
+      setIsLoading(true);
+      
+      // 1. Get or Create a Permanent Device ID
+      let storedId = await AsyncStorage.getItem('feargo_device_id');
+      if (!storedId) {
+        storedId = 'device_' + Math.random().toString(36).substring(2, 15);
+        await AsyncStorage.setItem('feargo_device_id', storedId);
       }
-    }
-    setIsLoading(false);
-  };
+      setDeviceId(storedId);
+
+      // 2. Fetch Session & Quiz
+      const { data: sessionData } = await supabase.from('sessions').select('id').eq('code', sessionCode).single();
+      
+      if (sessionData) {
+        const { data: quizData } = await supabase.from('quizzes').select('*').eq('session_id', sessionData.id).eq('is_active', true);
+        
+        if (quizData && quizData.length > 0) {
+          setQuestions(quizData);
+          
+          // 3. ANTI-CHEAT: Check if this device already submitted answers
+          const { data: pastResponses } = await supabase
+            .from('quiz_responses')
+            .select('*')
+            .eq('student_id', storedId);
+
+          if (pastResponses && pastResponses.length > 0) {
+            // Lock them into the Results screen
+            let restoredAnswers = {};
+            pastResponses.forEach(r => restoredAnswers[r.quiz_id] = r.selected_option);
+            setSelectedAnswers(restoredAnswers);
+            setIsSubmitted(true);
+          }
+        }
+      }
+      setIsLoading(false);
+    };
+
+    initializeQuiz();
+  }, [sessionCode]);
 
   const currentQ = questions[currentQuestionIndex];
   const totalQuestions = questions.length;
@@ -49,26 +73,29 @@ export default function StudentMCQ({ sessionCode, onLeave, onBack }) {
   const handleNext = () => { if (currentQuestionIndex < totalQuestions - 1) setCurrentQuestionIndex(prev => prev + 1); };
   const handlePrev = () => { if (currentQuestionIndex > 0) setCurrentQuestionIndex(prev => prev - 1); };
 
-  // --- NEW: SUBMIT TO SUPABASE ---
   const handleSubmit = async () => {
+    if (isSubmitted || !deviceId) return; 
     setIsSubmitted(true);
     
-    // Create an array of responses to insert
     const responses = Object.keys(selectedAnswers).map(quizId => ({
       quiz_id: quizId,
-      student_id: 'anonymous-student', // Since there's no auth, we just track the submission
+      student_id: deviceId, // Secure, permanent ID
       selected_option: selectedAnswers[quizId]
     }));
 
-    await supabase.from('quiz_responses').insert(responses);
+    const { error } = await supabase.from('quiz_responses').insert(responses);
+    
+    if (error) {
+      console.error("Submission error:", error);
+      alert("Error submitting quiz.");
+      setIsSubmitted(false); 
+    }
   };
 
   const calculateScore = () => {
     let score = 0;
     questions.forEach(q => {
-      if (selectedAnswers[q.id] === q.correct_option) {
-        score += 1;
-      }
+      if (selectedAnswers[q.id] === q.correct_option) score += 1;
     });
     return score;
   };
@@ -98,7 +125,6 @@ export default function StudentMCQ({ sessionCode, onLeave, onBack }) {
           <Image source={require('../assets/logo.png')} style={{ width: 36, height: 36 }} resizeMode="contain" />
           <Text style={styles.headerAppName}>FearGo</Text>
         </View>
-
         <View style={styles.headerRight}>
           <TouchableOpacity onPress={onBack} activeOpacity={0.8}>
             <View style={styles.backPill}>
@@ -111,23 +137,62 @@ export default function StudentMCQ({ sessionCode, onLeave, onBack }) {
 
       <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
         {isSubmitted ? (
-          <NeumorphicView style={styles.resultCard}>
-            <Ionicons name="checkmark-circle" size={80} color="#4CAF50" style={{ marginBottom: 20 }} />
-            <Text style={styles.resultTitle}>Quiz Submitted Successfully!</Text>
-            <Text style={styles.resultSubtitle}>You have completed this assessment.</Text>
-            
-            <NeumorphicView inset style={styles.scoreBox}>
-              <Text style={styles.scoreLabel}>Your Score</Text>
-              <Text style={styles.scoreValue}>{calculateScore()} / {totalQuestions}</Text>
+          <View style={{ width: '100%' }}>
+            {/* SCORE SUMMARY */}
+            <NeumorphicView style={[styles.resultCard, { marginBottom: 24 }]}>
+              <Ionicons name="checkmark-circle" size={80} color="#4CAF50" style={{ marginBottom: 20 }} />
+              <Text style={styles.resultTitle}>Quiz Submitted!</Text>
+              <NeumorphicView inset style={styles.scoreBox}>
+                <Text style={styles.scoreLabel}>Your Score</Text>
+                <Text style={styles.scoreValue}>{calculateScore()} / {totalQuestions}</Text>
+              </NeumorphicView>
             </NeumorphicView>
 
-            <TouchableOpacity style={{ marginTop: 40 }} onPress={onBack} activeOpacity={0.8}>
+            {/* DETAILED ANALYSIS LIST */}
+            <Text style={styles.analysisTitle}>Detailed Analysis</Text>
+            {questions.map((q, idx) => {
+              const studentAns = selectedAnswers[q.id];
+              const isCorrect = studentAns === q.correct_option;
+
+              return (
+                <NeumorphicView key={q.id} style={styles.analysisCard}>
+                  <View style={styles.analysisHeader}>
+                    <Text style={styles.analysisQNum}>Question {idx + 1}</Text>
+                    <Ionicons name={isCorrect ? "checkmark-circle" : "close-circle"} size={24} color={isCorrect ? "#4CAF50" : "#FF5C5C"} />
+                  </View>
+                  <Text style={styles.analysisQText}>{q.text}</Text>
+                  
+                  {q.options.map((opt, oIdx) => {
+                    const isStudentChoice = studentAns === oIdx;
+                    const isActualCorrect = q.correct_option === oIdx;
+                    
+                    let bgColor = '#e0e5ec'; 
+                    let borderColor = 'transparent';
+                    
+                    if (isActualCorrect) { bgColor = '#e8f5e9'; borderColor = '#4CAF50'; } 
+                    else if (isStudentChoice && !isActualCorrect) { bgColor = '#ffebee'; borderColor = '#FF5C5C'; }
+
+                    return (
+                      <View key={oIdx} style={[styles.analysisOption, { backgroundColor: bgColor, borderColor: borderColor, borderWidth: (isActualCorrect || isStudentChoice) ? 2 : 0 }]}>
+                        <Text style={[styles.analysisOptionText, isActualCorrect && {fontWeight: 'bold', color: '#2e7d32'}]}>
+                          {String.fromCharCode(65 + oIdx)}. {opt}
+                        </Text>
+                        {isStudentChoice && <Text style={{fontSize: 10, fontWeight: 'bold', color: isCorrect ? '#4CAF50' : '#FF5C5C'}}>YOUR ANSWER</Text>}
+                        {isActualCorrect && !isStudentChoice && <Text style={{fontSize: 10, fontWeight: 'bold', color: '#4CAF50'}}>CORRECT</Text>}
+                      </View>
+                    )
+                  })}
+                </NeumorphicView>
+              )
+            })}
+
+            <TouchableOpacity style={{ marginTop: 20, marginBottom: 40 }} onPress={onBack} activeOpacity={0.8}>
                 <View style={styles.submitButton}>
                   <Ionicons name="arrow-back" size={20} color="#fff" style={{ marginRight: 8 }} />
                   <Text style={styles.submitButtonText}>Return to Ask Doubts</Text>
                 </View>
             </TouchableOpacity>
-          </NeumorphicView>
+          </View>
         ) : (
           <>
             <NeumorphicView style={styles.card}>
@@ -189,9 +254,6 @@ const styles = StyleSheet.create({
   backPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
   backPillText: { fontSize: 13, fontWeight: 'bold', color: '#fff' },
   scrollContainer: { paddingHorizontal: 24, paddingTop: 20, paddingBottom: 20, width: '100%', maxWidth: 700, alignSelf: 'center', },
-  pageTitleSection: { alignItems: 'center', marginBottom: 30 },
-  pageTitle: { fontSize: 26, fontWeight: 'bold', color: '#2f3542', marginBottom: 8 },
-  pageSubtitle: { fontSize: 14, color: '#6b7280', textAlign: 'center', paddingHorizontal: 20 },
   card: { borderRadius: 20, padding: 16, marginBottom: 16 },
   questionIndex: { fontSize: 12, fontWeight: 'bold', color: '#0ea5e9', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
   questionText: { fontSize: 16, fontWeight: '600', color: '#2f3542', marginBottom: 16, lineHeight: 22 },
@@ -210,10 +272,16 @@ const styles = StyleSheet.create({
   navButtonText: { fontSize: 13, fontWeight: '700', color: '#4f8cff', marginHorizontal: 4, },
   submitButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', height: 56, borderRadius: 28, backgroundColor: '#4f8cff', shadowColor: '#4f8cff', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.4, shadowRadius: 10, elevation: 8, },
   submitButtonText: { fontSize: 16, fontWeight: 'bold', color: '#fff', letterSpacing: 0.5 },
-  resultCard: { borderRadius: 24, padding: 32, alignItems: 'center', marginTop: 20 },
-  resultTitle: { fontSize: 22, fontWeight: 'bold', color: '#2f3542', marginBottom: 8, textAlign: 'center' },
-  resultSubtitle: { fontSize: 15, color: '#6b7280', textAlign: 'center', marginBottom: 30 },
+  resultCard: { borderRadius: 24, padding: 32, alignItems: 'center', marginTop: 10 },
+  resultTitle: { fontSize: 24, fontWeight: 'bold', color: '#2f3542', marginBottom: 16, textAlign: 'center' },
   scoreBox: { padding: 24, borderRadius: 20, alignItems: 'center', width: '100%', maxWidth: 300, },
   scoreLabel: { fontSize: 14, fontWeight: '600', color: '#6b7280', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 },
   scoreValue: { fontSize: 42, fontWeight: 'bold', color: '#0ea5e9' },
+  analysisTitle: { fontSize: 20, fontWeight: 'bold', color: '#2f3542', marginBottom: 16, paddingLeft: 4 },
+  analysisCard: { borderRadius: 20, padding: 20, marginBottom: 16 },
+  analysisHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  analysisQNum: { fontSize: 13, fontWeight: 'bold', color: '#6b7280', textTransform: 'uppercase' },
+  analysisQText: { fontSize: 15, fontWeight: '600', color: '#2f3542', marginBottom: 16 },
+  analysisOption: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, marginBottom: 8 },
+  analysisOptionText: { fontSize: 14, color: '#4b5563', flex: 1 }
 });

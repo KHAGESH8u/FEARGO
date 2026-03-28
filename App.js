@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { View, Text, SafeAreaView } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, SafeAreaView, Alert, Platform } from 'react-native';
+import { supabase } from './utils/supabase';
 
 // --- IMPORT SCREENS ---
 import RoleSelection from './screens/RoleSelection';
@@ -22,15 +23,74 @@ export default function App() {
   const [currentView, setCurrentView] = useState('roleSelection');
   const [sessionCode, setSessionCode] = useState('');
   const [activeSession, setActiveSession] = useState(null); 
-  
-  // NEW: Store the logged-in teacher's credentials
   const [currentUser, setCurrentUser] = useState(null); 
 
+  // --- FIX 3: GLOBAL STUDENT RADAR ---
+  const [studentSessionId, setStudentSessionId] = useState(null);
+
+  // 1. Get the DB ID when a student joins
+  useEffect(() => {
+    if (!sessionCode) {
+      setStudentSessionId(null);
+      return;
+    }
+    const fetchId = async () => {
+      const { data } = await supabase.from('sessions').select('id').eq('code', sessionCode).single();
+      if (data) setStudentSessionId(data.id);
+    }
+    fetchId();
+  }, [sessionCode]);
+
+  // 2. Listen globally to events for this session!
+  useEffect(() => {
+    if (!studentSessionId) return;
+
+    // Listen for Auto-Kick (Session Ended)
+    const sessionSub = supabase.channel('global:session')
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'sessions', filter: `id=eq.${studentSessionId}` }, (payload) => {
+        if (payload.new.is_active === false) {
+           if(Platform.OS === 'web') alert("The teacher has ended this session."); 
+           else Alert.alert("Session Ended", "The teacher has closed this session.");
+           setSessionCode(''); // Clear code
+           setCurrentView('studentJoin'); // Kick to join screen
+        }
+      }).subscribe();
+
+    // Listen for Pulse Checks (Auto-Redirect)
+    const pulseSub = supabase.channel('global:pulses')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'pulses', filter: `session_id=eq.${studentSessionId}` }, () => {
+         setCurrentView('studentPulseCheck'); 
+      }).subscribe();
+
+    // Listen for Quizzes (Show global alert)
+    const quizSub = supabase.channel('global:quizzes')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'quizzes', filter: `session_id=eq.${studentSessionId}` }, (payload) => {
+         if (payload.new.is_active) {
+            if(Platform.OS === 'web') {
+               if(window.confirm("Live Quiz Active! The teacher has started a new quiz. Join now?")) {
+                 setCurrentView('studentMCQ');
+               }
+            } else {
+               Alert.alert("Live Quiz Active!", "The teacher has started a new quiz.", [
+                 { text: "Dismiss", style: "cancel" },
+                 { text: "Join Quiz", onPress: () => setCurrentView('studentMCQ') }
+               ]);
+            }
+         }
+      }).subscribe();
+
+    return () => {
+      supabase.removeChannel(sessionSub);
+      supabase.removeChannel(pulseSub);
+      supabase.removeChannel(quizSub);
+    };
+  }, [studentSessionId]);
+
+  // --- ROUTING LOGIC ---
   if (currentView === 'roleSelection') {
     return (
       <RoleSelection
         onSelectRole={(role) => {
-          // Route teachers to login, route students straight to join
           if (role === 'teacher') setCurrentView('teacherLogin');
           if (role === 'student') setCurrentView('studentJoin');
         }}
@@ -38,13 +98,13 @@ export default function App() {
     );
   }
 
-  // --- NEW: TEACHER LOGIN ROUTE ---
+  // --- TEACHER ROUTES ---
   if (currentView === 'teacherLogin') {
     return (
       <TeacherLogin
         onLogin={(user) => {
-          setCurrentUser(user); // Save the Supabase user ID
-          setCurrentView('teacherHome'); // Move to Dashboard
+          setCurrentUser(user); 
+          setCurrentView('teacherHome'); 
         }}
         onBack={() => setCurrentView('roleSelection')}
       />
@@ -54,14 +114,14 @@ export default function App() {
   if (currentView === 'teacherHome') {
     return (
       <TeacherHome
-        user={currentUser} // Pass the user to attach to the session
+        user={currentUser} 
         onCreateSession={(sessionData) => {
           setActiveSession(sessionData); 
           setCurrentView('liveDashboard');
         }}
         onViewSummary={() => setCurrentView('sessionSummary')}
         onBack={() => {
-          setCurrentUser(null); // "Logout" if they go back
+          setCurrentUser(null); 
           setCurrentView('roleSelection');
         }}
       />
@@ -74,14 +134,12 @@ export default function App() {
         session={activeSession}
         onEndSession={() => setCurrentView('sessionSummary')}
         onBack={() => setCurrentView('teacherHome')}
-        // NEW: Quiz Routing
         onCreateQuiz={() => setCurrentView('teacherQuizCreation')}
         onLiveQuiz={() => setCurrentView('teacherQuizResults')}
       />
     );
   }
 
-  // --- NEW: TEACHER QUIZ ROUTES ---
   if (currentView === 'teacherQuizCreation') {
     return (
       <TeacherQuizCreation 
@@ -133,7 +191,6 @@ export default function App() {
           setCurrentView('studentJoin');
         }}
         onPulseCheck={() => setCurrentView('studentPulseCheck')}
-        // NEW: Navigate to the student MCQ screen when they click the banner
         onViewQuiz={() => setCurrentView('studentMCQ')}
       />
     );
@@ -152,7 +209,6 @@ export default function App() {
     );
   }
 
-  // --- NEW: STUDENT MCQ ROUTE ---
   if (currentView === 'studentMCQ') {
     return (
       <StudentMCQ
@@ -166,7 +222,6 @@ export default function App() {
     );
   }
 
-  // Fallback for bad routes
   return (
     <SafeAreaView style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
       <Text>Error: Unknown Route `{currentView}`</Text>
