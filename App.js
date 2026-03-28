@@ -1,20 +1,22 @@
-import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import React, { useState } from 'react';
+import LiveDashboard from './screens/LiveDashboard';
+import SessionSummary from './screens/SessionSummary';
 
 export default function App() {
+  // Navigation State: 'live' for active dashboard, 'summary' for post-session analytics
+  const [currentView, setCurrentView] = useState('live');
+
+  if (currentView === 'summary') {
+    return (
+      <SessionSummary 
+        onRestart={() => setCurrentView('live')} 
+      />
+    );
+  }
+
   return (
-    <View style={styles.container}>
-      <Text>Open up App.js to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
+    <LiveDashboard 
+      onEndSession={() => setCurrentView('summary')} 
+    />
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});
