@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, View, ScrollView, Dimensions, TouchableOpacity, SafeAreaView, Platform } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, Dimensions, TouchableOpacity, SafeAreaView, Platform, StatusBar } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import NeumorphicView from '../components/NeumorphicView';
 
@@ -8,7 +8,7 @@ const isLargeScreen = width > 768;
 const cardPadding = isLargeScreen ? 24 : 16;
 const cardMargin = isLargeScreen ? 24 : 12;
 
-export default function SessionSummary({ onRestart }) {
+export default function SessionSummary({ onRestart, onBack }) {
   // Track expanded state for Timeline cards (default all to minimized)
   const [expandedPulses, setExpandedPulses] = useState({ 1: false, 2: false, 3: false, 4: false });
 
@@ -250,8 +250,25 @@ export default function SessionSummary({ onRestart }) {
 
   return (
     <SafeAreaView style={styles.safeArea}>
+
+      {/* ── SKY-BLUE HEADER ── */}
+      <View style={styles.headerBar}>
+        <View style={styles.headerLeft}>
+          <Ionicons name="pulse" size={24} color="#fff" />
+          <Text style={styles.headerAppName}>ClassPulse</Text>
+        </View>
+        
+        <TouchableOpacity onPress={onBack} activeOpacity={0.8}>
+          <View style={styles.backPill}>
+            <Ionicons name="arrow-back" size={16} color="#fff" style={{ marginRight: 4 }} />
+            <Text style={styles.backPillText}>Back</Text>
+          </View>
+        </TouchableOpacity>
+      </View>
+
       <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
         <View style={styles.maxWidthContainer}>
+         
 
           <View style={styles.spacingMedium} />
           {renderHeader()}
@@ -282,6 +299,29 @@ export default function SessionSummary({ onRestart }) {
 }
 
 const styles = StyleSheet.create({
+  // ── Sky-Blue Header ──
+  headerBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 10 : 12,
+    paddingBottom: 14,
+    backgroundColor: '#0ea5e9',
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
+    shadowColor: '#0ea5e9',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 10,
+  },
+  headerLeft: { flexDirection: 'row', alignItems: 'center' },
+  headerAppName: { fontSize: 18, fontWeight: 'bold', color: '#fff', marginLeft: 8, letterSpacing: 0.5 },
+  headerPageTitle: { fontSize: 16, fontWeight: '600', color: 'rgba(255,255,255,0.9)' },
+  backPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
+  backPillText: { fontSize: 13, fontWeight: 'bold', color: '#fff' },
+
   safeArea: { flex: 1, backgroundColor: '#e0e5ec' },
   scrollContainer: { padding: Platform.OS === 'web' ? 40 : 16, alignItems: 'center', backgroundColor: '#e0e5ec', minHeight: '100%' },
   maxWidthContainer: { width: '100%', maxWidth: 1200 },
