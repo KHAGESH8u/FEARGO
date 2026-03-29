@@ -50,11 +50,15 @@ export default function StudentAskDoubts({ sessionCode, onLeave, onPulseCheck, o
         onPulseCheck();
       }).subscribe();
 
-    // 2. Listen for Doubts being answered
+    // 2. Listen for NEW Doubts and ANSWERED Doubts
     const doubtSub = supabase.channel('public:doubts_update')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'doubts', filter: `session_id=eq.${sessionId}` }, (payload) => {
+        // When a doubt hits the database, push it to the screen officially
+        setPendingDoubts(prev => [payload.new, ...prev]);
+      })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'doubts', filter: `session_id=eq.${sessionId}` }, (payload) => {
         if (payload.new.is_answered) {
-          setPendingDoubts(prev => prev.filter(d => d.id !== payload.new.id));
+          setPendingDoubts(prev => prev.filter(d => d.id !== payload.new.id)); // Now the IDs will match perfectly!
           setAnsweredDoubts(prev => [payload.new, ...prev]);
         }
       }).subscribe();
@@ -92,12 +96,11 @@ export default function StudentAskDoubts({ sessionCode, onLeave, onPulseCheck, o
   const submitDoubt = async () => {
     if (doubtText.trim().length === 0 || !sessionId) return;
     
-    const tempId = Date.now().toString();
-    const newDoubt = { id: tempId, content: doubtText.trim(), is_answered: false, created_at: new Date().toISOString() };
-    setPendingDoubts(prev => [newDoubt, ...prev]);
-    setDoubtText('');
-
-    await supabase.from('doubts').insert([{ session_id: sessionId, content: newDoubt.content }]);
+    const textToSend = doubtText.trim();
+    setDoubtText(''); // Instantly clear the text box so it feels fast
+    
+    // Send to DB. The INSERT listener above will catch it and put it on the screen!
+    await supabase.from('doubts').insert([{ session_id: sessionId, content: textToSend }]);
   };
 
   const getTimeAgo = (dateString) => {

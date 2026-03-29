@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, ScrollView, Dimensions, TouchableOpacity, SafeAreaView, Platform, StatusBar, Image } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { StyleSheet, Text, View, ScrollView, Dimensions, TouchableOpacity, SafeAreaView, Platform, StatusBar, Image, Alert } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
 import QRCode from 'react-native-qrcode-svg';
@@ -44,11 +44,18 @@ export default function LiveDashboard({ session, onEndSession, onBack, onCreateQ
   const [pulseCount, setPulseCount] = useState(0);
   const [pulseHistory, setPulseHistory] = useState([]);
   const [responsesCount, setResponsesCount] = useState({ gotIt: 0, sortOf: 0, lost: 0, total: 0 });
-  
-  // NEW: Quiz State (We will link this to Supabase next!)
+
   const [quizActive, setQuizActive] = useState(false);
 
-  const displayCode = session?.code || 'ERROR'; 
+  const repulseTimeout = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (repulseTimeout.current) clearTimeout(repulseTimeout.current);
+    };
+  }, []);
+
+  const displayCode = session?.code || 'ERROR';
   const sessionId = session?.id;
 
   // --- SUPABASE SUBSCRIPTIONS ---
@@ -57,14 +64,14 @@ export default function LiveDashboard({ session, onEndSession, onBack, onCreateQ
 
     const doubtSub = supabase
       .channel('public:doubts')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'doubts', filter: `session_id=eq.${sessionId}` }, 
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'doubts', filter: `session_id=eq.${sessionId}` },
         (payload) => setQuestions((prev) => [payload.new, ...prev])
       )
       .subscribe();
 
     const responseSub = supabase
       .channel('public:responses')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'responses' }, 
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'responses' },
         (payload) => {
           if (payload.new.pulse_id === currentPulseId) {
             setResponsesCount(prev => {
@@ -118,17 +125,41 @@ export default function LiveDashboard({ session, onEndSession, onBack, onCreateQ
     }
   };
 
+  // --- NEW: RE-PULSE LOGIC ---
+  const handleRepulse = () => {
+    if (Platform.OS === 'web') {
+      if (window.confirm("This will end the current pulse and instantly start a new one. Proceed?")) {
+        executeRepulse();
+      }
+    } else {
+      Alert.alert("Re-Pulse", "This will end the current pulse and instantly start a new one. Proceed?", [
+        { text: "Cancel", style: "cancel" },
+        { text: "Yes, Re-Pulse", onPress: () => executeRepulse() }
+      ]);
+    }
+  };
+
+  const executeRepulse = async () => {
+    await endPulse();
+    repulseTimeout.current = setTimeout(() => {
+      startPulse();
+    }, 400);
+  };
+
   const handleEndSession = async () => {
     if (sessionId) await supabase.from('sessions').update({ is_active: false }).eq('id', sessionId);
     onEndSession();
   };
 
   const getPercentage = (value, total) => total === 0 ? '0%' : Math.round((value / total) * 100) + '%';
-  const isHighConfusion = pulseActive && responsesCount.total > 0 && ((responsesCount.lost / responsesCount.total) > 0.4);
+
+  // --- NEW: 40% CONFUSION THRESHOLD ---
+  const confusedCount = responsesCount.lost + responsesCount.sortOf;
+  // Requires at least 2 responses so one quick "Lost" click doesn't trigger alarms instantly
+  const isHighConfusion = pulseActive && responsesCount.total >= 2 && ((confusedCount / responsesCount.total) >= 0.4);
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      {/* ── NEW: FEARGO LOGO HEADER ── */}
       <View style={styles.headerBar}>
         <View style={styles.headerLeft}>
           <Image source={require('../assets/logo.png')} style={{ width: 36, height: 36 }} resizeMode="contain" />
@@ -149,7 +180,7 @@ export default function LiveDashboard({ session, onEndSession, onBack, onCreateQ
       <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
         <View style={styles.maxWidthContainer}>
 
-          {/* SESSION JOIN CARD (With Real QR Code) */}
+          {/* SESSION JOIN CARD */}
           <NeumorphicView style={[styles.card, { padding: cardPadding }]}>
             <View style={isLargeScreen ? styles.row : styles.column}>
               <View style={[styles.flex1, styles.qrSection]}>
@@ -189,7 +220,7 @@ export default function LiveDashboard({ session, onEndSession, onBack, onCreateQ
             </View>
           </NeumorphicView>
 
-          {/* NEW SECTION — QUIZ CONTROL (From Friend's UI) */}
+          {/* QUIZ CONTROL PANEL */}
           <NeumorphicView style={[styles.card, { padding: isLargeScreen ? 16 : 12 }, styles.spacingTop]}>
             <View style={{ flexDirection: isLargeScreen ? 'row' : 'column', justifyContent: 'space-between', alignItems: isLargeScreen ? 'center' : 'flex-start' }}>
               <View style={{ marginBottom: isLargeScreen ? 0 : 10 }}>
@@ -257,7 +288,6 @@ export default function LiveDashboard({ session, onEndSession, onBack, onCreateQ
             </View>
           </NeumorphicView>
 
-          {/* NEW: Pulse History Label (Friend's Addition) */}
           {pulseActive && (
             <Text style={[styles.pulseHistoryLabel, { textAlign: 'center', marginBottom: 12 }]}>
               Pulse #{pulseCount} — Topic Feedback
@@ -315,7 +345,7 @@ export default function LiveDashboard({ session, onEndSession, onBack, onCreateQ
             </NeumorphicView>
           </View>
 
-          {/* LIVE UNDERSTANDING CHART (Dynamic SVG) */}
+          {/* LIVE UNDERSTANDING CHART */}
           <NeumorphicView style={[styles.card, { padding: cardPadding, opacity: pulseActive ? 1 : 0.5 }, styles.spacingTop]}>
             <Text style={styles.cardTitle}>Pulse Check Results</Text>
             <View style={styles.chartContainer}>
@@ -332,24 +362,29 @@ export default function LiveDashboard({ session, onEndSession, onBack, onCreateQ
             </View>
           </NeumorphicView>
 
-          {/* CONFUSION ALERT */}
+          {/* --- NEW: HIGH CONFUSION RE-PULSE ALERT --- */}
           {isHighConfusion && (
             <NeumorphicView style={[styles.card, { padding: cardPadding }, styles.spacingTop]} isGlow={true} glowColor="#FFC107">
               <View style={styles.alertRow}>
                 <View style={styles.alertIcon}>
-                  <Ionicons name="warning" size={28} color="#FFC107" />
+                  <Ionicons name="warning" size={32} color="#F57C00" />
                 </View>
                 <View style={styles.flex1}>
-                  <Text style={styles.alertTitle}>Alert: Many students are confused</Text>
+                  <Text style={styles.alertTitle}>High Confusion Detected!</Text>
                   <Text style={styles.alertSubtext}>
-                    More than 40% of students selected "Lost". Consider pausing and re-explaining the topic.
+                    {getPercentage(confusedCount, responsesCount.total)} of students are struggling with this concept.
                   </Text>
+                  <TouchableOpacity style={{ marginTop: 14 }} onPress={handleRepulse} activeOpacity={0.7}>
+                    <NeumorphicView inset={false} style={{ paddingVertical: 10, paddingHorizontal: 16, borderRadius: 12, backgroundColor: '#fff8e1', alignSelf: 'flex-start', borderWidth: 1, borderColor: '#ffe082' }}>
+                      <Text style={{ color: '#F57C00', fontWeight: 'bold', fontSize: 13 }}>↻ Re-Pulse Now</Text>
+                    </NeumorphicView>
+                  </TouchableOpacity>
                 </View>
               </View>
             </NeumorphicView>
           )}
 
-          {/* NEW SECTION — PULSE HISTORY (Friend's Addition) */}
+          {/* PULSE HISTORY */}
           <NeumorphicView style={[styles.card, { padding: cardPadding }, styles.spacingTop]}>
             <Text style={styles.cardTitle}>Pulse History</Text>
             <View style={styles.questionsContainer}>
@@ -442,9 +477,9 @@ const styles = StyleSheet.create({
   cardLabelSmall: { fontSize: 12, fontWeight: '600', color: '#2f3542', textAlign: 'center' },
   percentageText: { fontSize: 14, fontWeight: 'bold', color: '#6b7280', marginTop: 4 },
   alertRow: { flexDirection: 'row', alignItems: 'center' },
-  alertIcon: { marginRight: 12 },
-  alertTitle: { fontSize: 16, fontWeight: 'bold', color: '#2f3542', marginBottom: 4 },
-  alertSubtext: { fontSize: 12, color: '#6b7280', lineHeight: 18 },
+  alertIcon: { marginRight: 16 },
+  alertTitle: { fontSize: 16, fontWeight: 'bold', color: '#F57C00', marginBottom: 4 },
+  alertSubtext: { fontSize: 13, color: '#6b7280', lineHeight: 18 },
   questionsContainer: { marginTop: 8 },
   questionCard: { padding: 16, borderRadius: 16, marginBottom: 16, flexDirection: 'column', alignItems: 'flex-start' },
   questionText: { fontSize: 14, color: '#2f3542', fontStyle: 'italic', marginBottom: 16 },

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   StyleSheet, Text, View, SafeAreaView, TouchableOpacity,
-  ScrollView, Dimensions, Platform, StatusBar, Image, ActivityIndicator
+  ScrollView, Dimensions, Platform, StatusBar, Image, ActivityIndicator, AppState, BackHandler, Alert
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import NeumorphicView from '../components/NeumorphicView';
@@ -14,17 +14,19 @@ const isLargeScreen = width > 768;
 export default function StudentMCQ({ sessionCode, onLeave, onBack }) {
   const [questions, setQuestions] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  
+
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [selectedAnswers, setSelectedAnswers] = useState({});
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [deviceId, setDeviceId] = useState(null);
 
+  // --- INITIALIZE & REAL-TIME REFRESH ---
   useEffect(() => {
+    let quizSub;
+
     const initializeQuiz = async () => {
       setIsLoading(true);
-      
-      // 1. Get or Create a Permanent Device ID
+
       let storedId = await AsyncStorage.getItem('feargo_device_id');
       if (!storedId) {
         storedId = 'device_' + Math.random().toString(36).substring(2, 15);
@@ -32,35 +34,72 @@ export default function StudentMCQ({ sessionCode, onLeave, onBack }) {
       }
       setDeviceId(storedId);
 
-      // 2. Fetch Session & Quiz
       const { data: sessionData } = await supabase.from('sessions').select('id').eq('code', sessionCode).single();
-      
+
       if (sessionData) {
         const { data: quizData } = await supabase.from('quizzes').select('*').eq('session_id', sessionData.id).eq('is_active', true);
-        
+
         if (quizData && quizData.length > 0) {
           setQuestions(quizData);
-          
-          // 3. ANTI-CHEAT: Check if this device already submitted answers
-          const { data: pastResponses } = await supabase
-            .from('quiz_responses')
-            .select('*')
-            .eq('student_id', storedId);
+
+          const currentQuizIds = quizData.map(q => q.id);
+          const { data: pastResponses } = await supabase.from('quiz_responses').select('*').eq('student_id', storedId).in('quiz_id', currentQuizIds);
 
           if (pastResponses && pastResponses.length > 0) {
-            // Lock them into the Results screen
             let restoredAnswers = {};
             pastResponses.forEach(r => restoredAnswers[r.quiz_id] = r.selected_option);
             setSelectedAnswers(restoredAnswers);
             setIsSubmitted(true);
           }
         }
+
+        quizSub = supabase.channel('mcq_screen_refresh')
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'quizzes', filter: `session_id=eq.${sessionData.id}` }, (payload) => {
+            if (payload.new.is_active) {
+              setIsSubmitted(false);
+              setSelectedAnswers({});
+              setCurrentQuestionIndex(0);
+              initializeQuiz();
+            }
+          }).subscribe();
       }
       setIsLoading(false);
     };
 
     initializeQuiz();
+
+    return () => {
+      if (quizSub) supabase.removeChannel(quizSub);
+    };
   }, [sessionCode]);
+
+  // --- CORRECTED: ANTI-CHEAT EXAM MODE ---
+  useEffect(() => {
+    // 1. Block the Android Hardware Back Button
+    const onBackPress = () => {
+      if (Platform.OS === 'web') alert("Exam Mode Active: You cannot go back during a live quiz.");
+      else Alert.alert("Exam Mode", "You cannot go back during an active exam.");
+      return true;
+    };
+
+    // FIX: Assign the listener to a variable
+    const backHandlerSubscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+
+    // 2. Detect if they switch apps
+    const appStateSubscription = AppState.addEventListener('change', nextAppState => {
+      if ((nextAppState === 'background' || nextAppState === 'inactive') && !isSubmitted) {
+        if (Platform.OS === 'web') alert("Session Disconnected: You left the app during an active exam.");
+        else Alert.alert("Disconnected", "You left the app during an active exam.");
+        onLeave();
+      }
+    });
+
+    return () => {
+      // FIX: Use the .remove() method on the subscriptions
+      backHandlerSubscription.remove();
+      appStateSubscription.remove();
+    };
+  }, [isSubmitted, onLeave]);
 
   const currentQ = questions[currentQuestionIndex];
   const totalQuestions = questions.length;
@@ -74,21 +113,22 @@ export default function StudentMCQ({ sessionCode, onLeave, onBack }) {
   const handlePrev = () => { if (currentQuestionIndex > 0) setCurrentQuestionIndex(prev => prev - 1); };
 
   const handleSubmit = async () => {
-    if (isSubmitted || !deviceId) return; 
+    if (isSubmitted || !deviceId) return;
     setIsSubmitted(true);
-    
+
     const responses = Object.keys(selectedAnswers).map(quizId => ({
       quiz_id: quizId,
-      student_id: deviceId, // Secure, permanent ID
+      student_id: deviceId,
       selected_option: selectedAnswers[quizId]
     }));
 
     const { error } = await supabase.from('quiz_responses').insert(responses);
-    
+
     if (error) {
       console.error("Submission error:", error);
-      alert("Error submitting quiz.");
-      setIsSubmitted(false); 
+      if (Platform.OS === 'web') alert("Error submitting quiz.");
+      else Alert.alert("Error", "Could not submit quiz.");
+      setIsSubmitted(false);
     }
   };
 
@@ -126,12 +166,15 @@ export default function StudentMCQ({ sessionCode, onLeave, onBack }) {
           <Text style={styles.headerAppName}>FearGo</Text>
         </View>
         <View style={styles.headerRight}>
-          <TouchableOpacity onPress={onBack} activeOpacity={0.8}>
-            <View style={styles.backPill}>
-              <Ionicons name="arrow-back" size={16} color="#fff" style={{ marginRight: 4 }} />
-              <Text style={styles.backPillText}>Back</Text>
-            </View>
-          </TouchableOpacity>
+          {/* ONLY show the back button IF they have submitted the quiz */}
+          {isSubmitted && (
+            <TouchableOpacity onPress={onBack} activeOpacity={0.8}>
+              <View style={styles.backPill}>
+                <Ionicons name="arrow-back" size={16} color="#fff" style={{ marginRight: 4 }} />
+                <Text style={styles.backPillText}>Back</Text>
+              </View>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -161,24 +204,24 @@ export default function StudentMCQ({ sessionCode, onLeave, onBack }) {
                     <Ionicons name={isCorrect ? "checkmark-circle" : "close-circle"} size={24} color={isCorrect ? "#4CAF50" : "#FF5C5C"} />
                   </View>
                   <Text style={styles.analysisQText}>{q.text}</Text>
-                  
+
                   {q.options.map((opt, oIdx) => {
                     const isStudentChoice = studentAns === oIdx;
                     const isActualCorrect = q.correct_option === oIdx;
-                    
-                    let bgColor = '#e0e5ec'; 
+
+                    let bgColor = '#e0e5ec';
                     let borderColor = 'transparent';
-                    
-                    if (isActualCorrect) { bgColor = '#e8f5e9'; borderColor = '#4CAF50'; } 
+
+                    if (isActualCorrect) { bgColor = '#e8f5e9'; borderColor = '#4CAF50'; }
                     else if (isStudentChoice && !isActualCorrect) { bgColor = '#ffebee'; borderColor = '#FF5C5C'; }
 
                     return (
                       <View key={oIdx} style={[styles.analysisOption, { backgroundColor: bgColor, borderColor: borderColor, borderWidth: (isActualCorrect || isStudentChoice) ? 2 : 0 }]}>
-                        <Text style={[styles.analysisOptionText, isActualCorrect && {fontWeight: 'bold', color: '#2e7d32'}]}>
+                        <Text style={[styles.analysisOptionText, isActualCorrect && { fontWeight: 'bold', color: '#2e7d32' }]}>
                           {String.fromCharCode(65 + oIdx)}. {opt}
                         </Text>
-                        {isStudentChoice && <Text style={{fontSize: 10, fontWeight: 'bold', color: isCorrect ? '#4CAF50' : '#FF5C5C'}}>YOUR ANSWER</Text>}
-                        {isActualCorrect && !isStudentChoice && <Text style={{fontSize: 10, fontWeight: 'bold', color: '#4CAF50'}}>CORRECT</Text>}
+                        {isStudentChoice && <Text style={{ fontSize: 10, fontWeight: 'bold', color: isCorrect ? '#4CAF50' : '#FF5C5C' }}>YOUR ANSWER</Text>}
+                        {isActualCorrect && !isStudentChoice && <Text style={{ fontSize: 10, fontWeight: 'bold', color: '#4CAF50' }}>CORRECT</Text>}
                       </View>
                     )
                   })}
@@ -187,10 +230,10 @@ export default function StudentMCQ({ sessionCode, onLeave, onBack }) {
             })}
 
             <TouchableOpacity style={{ marginTop: 20, marginBottom: 40 }} onPress={onBack} activeOpacity={0.8}>
-                <View style={styles.submitButton}>
-                  <Ionicons name="arrow-back" size={20} color="#fff" style={{ marginRight: 8 }} />
-                  <Text style={styles.submitButtonText}>Return to Ask Doubts</Text>
-                </View>
+              <View style={styles.submitButton}>
+                <Ionicons name="arrow-back" size={20} color="#fff" style={{ marginRight: 8 }} />
+                <Text style={styles.submitButtonText}>Return to Ask Doubts</Text>
+              </View>
             </TouchableOpacity>
           </View>
         ) : (

@@ -21,6 +21,8 @@ export default function StudentPulseCheck({ sessionCode, onLeave, onBack }) {
   const [activePulseId, setActivePulseId] = useState(null);
 
   useEffect(() => {
+    let pulseSub;
+
     const fetchRealPulse = async () => {
       const { data: sessionData } = await supabase.from('sessions').select('id').eq('code', sessionCode).single();
       if (!sessionData) return;
@@ -30,8 +32,24 @@ export default function StudentPulseCheck({ sessionCode, onLeave, onBack }) {
       if (pulseData && pulseData.length > 0) {
         setActivePulseId(pulseData[0].id);
       }
+
+      // --- THE FIX: LISTEN FOR NEW PULSES WHILE WAITING ON THIS SCREEN ---
+      pulseSub = supabase.channel('pulse_screen_refresh')
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'pulses', filter: `session_id=eq.${sessionData.id}` }, (payload) => {
+           // WIPE THE SLATE CLEAN FOR THE NEW PULSE!
+           setSubmitted(false);
+           setSelectedOption(null);
+           setShowDoubtBox(false);
+           setDoubtText('');
+           setActivePulseId(payload.new.id);
+        }).subscribe();
     };
+    
     fetchRealPulse();
+
+    return () => {
+      if (pulseSub) supabase.removeChannel(pulseSub);
+    };
   }, [sessionCode]);
 
   const handleSelect = async (option) => {
